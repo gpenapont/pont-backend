@@ -168,6 +168,10 @@ app.post("/api/chat/:slug", async (req, res) => {
       }),
     });
     const data = await anthropicRes.json();
+    if (!anthropicRes.ok || data.type === "error") {
+      console.error("Error de Anthropic:", anthropicRes.status, JSON.stringify(data));
+      return res.status(502).json({ error: "Error al llamar a Claude", detail: data.error || data });
+    }
     const textBlock = (data.content || []).find((b) => b.type === "text");
     const rawText = textBlock ? textBlock.text : "";
 
