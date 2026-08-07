@@ -237,21 +237,37 @@ app.post("/api/chat/:slug", async (req, res) => {
   }
 });
 
-// Panel simple para que el negocio vea sus pedidos.
-// TODO antes de producción: proteger esta ruta con autenticación real (hoy cualquiera con el slug puede verla).
+// Panel simple para que el negocio vea sus pedidos. Protegido con una clave por negocio
+// (header x-dashboard-key), guardada en la columna dashboard_password de businesses.
 app.get("/api/business/:slug/orders", async (req, res) => {
-  const { rows } = await pool.query(
-    `select o.* from orders o join businesses b on b.id = o.business_id
-     where b.slug = $1 order by o.created_at desc limit 100`,
-    [req.params.slug]
-  );
+  const { rows: bizRows } = await pool.query("select id, dashboard_password from businesses where slug = $1", [
+    req.params.slug,
+  ]);
+  const biz = bizRows[0];
+  if (!biz) return res.status(404).json({ error: "Negocio no encontrado" });
+  if (biz.dashboard_password && req.headers["x-dashboard-key"] !== biz.dashboard_password) {
+    return res.status(401).json({ error: "Clave incorrecta" });
+  }
+
+  const { rows } = await pool.query("select * from orders where business_id = $1 order by created_at desc limit 100", [
+    biz.id,
+  ]);
   res.json(rows);
 });
 
-// El negocio marca manualmente que verificó la transferencia en su cuenta.
-// TODO antes de producción: también proteger con autenticación.
+// El negocio marca manualmente que verificó la transferencia en su cuenta. Misma clave.
 app.patch("/api/orders/:orderId/status", async (req, res) => {
   const { status } = req.body; // 'pago_verificado' o 'cancelado'
+  const { rows: orderRows } = await pool.query(
+    "select o.id, b.dashboard_password from orders o join businesses b on b.id = o.business_id where o.id = $1",
+    [req.params.orderId]
+  );
+  const row = orderRows[0];
+  if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
+  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password) {
+    return res.status(401).json({ error: "Clave incorrecta" });
+  }
+
   const { rows } = await pool.query("update orders set status = $1 where id = $2 returning *", [
     status,
     req.params.orderId,
