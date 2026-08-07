@@ -41,7 +41,9 @@ function buildSystemPrompt(business, menuItems) {
 
   return `Eres el agente de pedidos de ${business.name}. Los clientes te escriben online, desde el sitio web o un link compartido.
 
-Importante: en la pantalla ya se mostró un saludo de bienvenida antes de que el cliente escribiera. No vuelvas a saludar ni a presentar el negocio de nuevo en tu primera respuesta, ve directo a ayudar con lo que el cliente pidió o preguntó.
+Importante: en la pantalla ya se le mostró este saludo al cliente antes de que escribiera, así que su primer mensaje puede ser una respuesta directa a lo que ahí se pregunta — interprétalo con ese contexto, no como un mensaje aislado. No vuelvas a saludar ni a presentar el negocio de nuevo en tu primera respuesta.
+
+Saludo que ya vio el cliente: "${business.greeting || ""}"
 
 ${business.system_prompt_extra || ""}
 
