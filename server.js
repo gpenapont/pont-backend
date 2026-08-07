@@ -50,7 +50,7 @@ ${menuText}
 
 Tu trabajo:
 - Ayudar al cliente a elegir productos y calcular el total.
-- Responder en español neutro, amable pero sin modismos chilenos informales (nada de "bacán", "al tiro", "cachai", "po") y sin sonar tampoco excesivamente formal o robótico. Breve (máximo 3-4 líneas). Sin markdown ni asteriscos.
+- Responder en español neutro, amable pero sin modismos chilenos informales (nada de "bacán", "al tiro", "cachai", "po") y sin sonar tampoco excesivamente formal o robótico. Mantén las respuestas razonablemente breves, salvo que las instrucciones del negocio (más arriba) pidan un estilo más extenso, como explicaciones o recomendaciones detalladas. Sin markdown ni asteriscos.
 - Si el cliente indica que no quiere agregar nada más (por ejemplo "nada más", "eso es todo", "solo eso", "no gracias"), no vuelvas a preguntar si quiere algo más. Avanza directo al siguiente paso: si falta el tipo de entrega, pregúntalo; si ya lo tienes, resume el pedido completo y pide confirmación.
 - Antes de cerrar el pedido, pregunta si es despacho a domicilio o retiro en tienda. Si es despacho, pide dirección y comuna.
 - Después resume lo que llevan, el tipo de entrega y pregunta si está todo correcto.
@@ -72,9 +72,9 @@ function deriveOrderStatus(parsedOrder) {
 }
 
 // Endpoint público: lo consulta el frontend genérico al cargar, para saber
-// el nombre y el catálogo del negocio. Nunca expone system_prompt_extra ni datos bancarios.
+// el nombre, el saludo y el catálogo del negocio. Nunca expone system_prompt_extra ni datos bancarios.
 app.get("/api/business/:slug", async (req, res) => {
-  const { rows: businessRows } = await pool.query("select id, slug, name from businesses where slug = $1", [
+  const { rows: businessRows } = await pool.query("select id, slug, name, greeting from businesses where slug = $1", [
     req.params.slug,
   ]);
   const business = businessRows[0];
@@ -84,7 +84,90 @@ app.get("/api/business/:slug", async (req, res) => {
     "select name, price, category from menu_items where business_id = $1 and active = true order by category, name",
     [business.id]
   );
-  res.json({ slug: business.slug, name: business.name, menuItems });
+  res.json({ slug: business.slug, name: business.name, greeting: business.greeting, menuItems });
+});
+
+// Helper compartido: busca el negocio por slug y valida la clave del panel (header x-dashboard-key).
+// Devuelve la fila del negocio si todo bien, o null y ya responde el error si no.
+async function getBusinessWithAuth(req, res) {
+  const { rows } = await pool.query("select * from businesses where slug = $1", [req.params.slug]);
+  const business = rows[0];
+  if (!business) {
+    res.status(404).json({ error: "Negocio no encontrado" });
+    return null;
+  }
+  if (business.dashboard_password && req.headers["x-dashboard-key"] !== business.dashboard_password) {
+    res.status(401).json({ error: "Clave incorrecta" });
+    return null;
+  }
+  return business;
+}
+
+// Panel de configuración: el negocio ve y edita su saludo, instrucciones, datos bancarios y catálogo.
+app.get("/api/business/:slug/settings", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { rows: menuItems } = await pool.query(
+    "select id, name, price, category, active from menu_items where business_id = $1 order by category, name",
+    [business.id]
+  );
+  res.json({
+    name: business.name,
+    greeting: business.greeting,
+    system_prompt_extra: business.system_prompt_extra,
+    bank_name: business.bank_name,
+    bank_account_type: business.bank_account_type,
+    bank_account_number: business.bank_account_number,
+    bank_rut: business.bank_rut,
+    bank_email: business.bank_email,
+    menuItems,
+  });
+});
+
+app.put("/api/business/:slug/settings", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email } = req.body;
+  await pool.query(
+    `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
+     bank_account_number=$5, bank_rut=$6, bank_email=$7 where id=$8`,
+    [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email, business.id]
+  );
+  res.json({ saved: true });
+});
+
+app.post("/api/business/:slug/menu-items", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { name, price, category } = req.body;
+  const { rows } = await pool.query(
+    "insert into menu_items (business_id, name, price, category) values ($1,$2,$3,$4) returning *",
+    [business.id, name, price, category || null]
+  );
+  res.json(rows[0]);
+});
+
+app.put("/api/business/:slug/menu-items/:itemId", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { name, price, category, active } = req.body;
+  const { rows } = await pool.query(
+    "update menu_items set name=$1, price=$2, category=$3, active=$4 where id=$5 and business_id=$6 returning *",
+    [name, price, category || null, active, req.params.itemId, business.id]
+  );
+  res.json(rows[0]);
+});
+
+app.delete("/api/business/:slug/menu-items/:itemId", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  await pool.query("delete from menu_items where id=$1 and business_id=$2", [req.params.itemId, business.id]);
+  res.json({ deleted: true });
 });
 
 // Recupera una conversación existente por sessionId (para restaurar el chat al recargar la página).
