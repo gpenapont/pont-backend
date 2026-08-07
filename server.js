@@ -10,7 +10,6 @@ import express from "express";
 import cors from "cors";
 import pkg from "pg";
 import "dotenv/config";
-import { WebpayPlus, Options, Environment } from "transbank-sdk";
 
 const { Pool } = pkg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -25,10 +24,25 @@ const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
 // Configúrala en las variables de entorno de Railway.
 const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || "https://pont-backend-production.up.railway.app";
 
+// transbank-sdk se carga solo cuando realmente se necesita (no al iniciar el servidor).
+// Así, si algo falla con esa librería, solo falla la función de pago con Webpay,
+// nunca tumba el resto del backend (chats, pedidos, todo lo demás sigue andando).
+let _transbank = null;
+async function getTransbank() {
+  if (!_transbank) {
+    const mod = await import("transbank-sdk");
+    // transbank-sdk es CommonJS; hay que leer sus propiedades desde .default,
+    // no confiar en los named exports sintéticos (algunos, como 'Environment', no siempre se detectan bien).
+    _transbank = mod.default || mod;
+  }
+  return _transbank;
+}
+
 // Crea la transacción en Transbank y devuelve el link que hay que mandarle al cliente.
 // Si el negocio no tiene credenciales propias cargadas, usa el ambiente de pruebas
 // (sandbox) que trae el SDK — sirve para probar todo el flujo sin ser comercio real todavía.
 async function createWebpayTransaction(business, order) {
+  const { WebpayPlus, Options, Environment } = await getTransbank();
   const tx = business.webpay_commerce_code && business.webpay_api_key
     ? new WebpayPlus.Transaction(new Options(business.webpay_commerce_code, business.webpay_api_key, Environment.Production))
     : WebpayPlus.Transaction.buildForIntegration();
@@ -462,6 +476,7 @@ app.all("/api/webpay/return", async (req, res) => {
 
   const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
   const business = bizRows[0];
+  const { WebpayPlus, Options, Environment } = await getTransbank();
   const tx = business.webpay_commerce_code && business.webpay_api_key
     ? new WebpayPlus.Transaction(new Options(business.webpay_commerce_code, business.webpay_api_key, Environment.Production))
     : WebpayPlus.Transaction.buildForIntegration();
