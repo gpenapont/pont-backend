@@ -58,7 +58,7 @@ Tu trabajo:
 ${paymentSection}
 
 Formato obligatorio de cada respuesta:
-Primero tu respuesta al cliente en texto plano. Después, en una línea aparte, agrega exactamente un bloque con el estado del pedido, así:
+Primero tu respuesta al cliente en texto plano — esta parte nunca puede estar vacía, ni siquiera al confirmar el pedido, siempre debe haber un mensaje visible para el cliente. Después, en una línea aparte, agrega exactamente un bloque con el estado del pedido, así:
 <order>{"items":[{"name":"...","qty":1,"price":0}],"total":0,"delivery":{"type":"despacho","address":"..."},"payment":{"status":"pendiente"},"confirmed":false}</order>
 
 El campo payment.status puede ser: null, "pendiente" o "cliente_avisa_transferencia" (usa null si este negocio no cobra por transferencia).
@@ -188,6 +188,12 @@ app.post("/api/chat/:slug", async (req, res) => {
       }
     }
     replyText = replyText.replace(/\[DATOS_BANCARIOS\]/g, formatBankDetails(business));
+    if (!replyText.trim()) {
+      // Nunca guardar un mensaje vacío: eso confunde a Claude en el siguiente turno y genera un bucle.
+      replyText = parsedOrder && parsedOrder.confirmed
+        ? "¡Listo! Tu pedido quedó confirmado."
+        : "¿Me confirmas eso de nuevo?";
+    }
 
     await pool.query("insert into messages (conversation_id, role, content) values ($1, 'assistant', $2)", [
       conversation.id,
