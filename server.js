@@ -38,14 +38,21 @@ async function getTransbank() {
   return _transbank;
 }
 
+// Arma la configuración de Transbank: usa las credenciales propias del negocio si las tiene
+// cargadas (ambiente de producción), o las credenciales de prueba oficiales de Transbank
+// si no (ambiente de integración). No usamos buildForIntegration() porque en esta versión
+// del SDK falla con 401 — se comprobó explícitamente que armar Options a mano sí funciona.
+async function getWebpayTransaction(business) {
+  const { WebpayPlus, Options, Environment, IntegrationCommerceCodes, IntegrationApiKeys } = await getTransbank();
+  const commerceCode = business.webpay_commerce_code || IntegrationCommerceCodes.WEBPAY_PLUS;
+  const apiKey = business.webpay_api_key || IntegrationApiKeys.WEBPAY;
+  const environment = business.webpay_commerce_code ? Environment.Production : Environment.Integration;
+  return { tx: new WebpayPlus.Transaction(new Options(commerceCode, apiKey, environment)), environment };
+}
+
 // Crea la transacción en Transbank y devuelve el link que hay que mandarle al cliente.
-// Si el negocio no tiene credenciales propias cargadas, usa el ambiente de pruebas
-// (sandbox) que trae el SDK — sirve para probar todo el flujo sin ser comercio real todavía.
 async function createWebpayTransaction(business, order) {
-  const { WebpayPlus, Options, Environment } = await getTransbank();
-  const tx = business.webpay_commerce_code && business.webpay_api_key
-    ? new WebpayPlus.Transaction(new Options(business.webpay_commerce_code, business.webpay_api_key, Environment.Production))
-    : WebpayPlus.Transaction.buildForIntegration();
+  const { tx } = await getWebpayTransaction(business);
 
   const buyOrder = order.id.replace(/-/g, "").slice(0, 20);
   const returnUrl = `${PUBLIC_BACKEND_URL}/api/webpay/return`;
@@ -451,10 +458,8 @@ app.get("/api/webpay/redirect/:token", async (req, res) => {
 
   const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
   const business = bizRows[0];
-
-  const webpayUrl = business.webpay_commerce_code
-    ? "https://webpay3g.transbank.cl/webpayserver/initTransaction"
-    : "https://webpay3gint.transbank.cl/webpayserver/initTransaction";
+  const { environment } = await getWebpayTransaction(business);
+  const webpayUrl = `${environment}/webpayserver/initTransaction`;
 
   res.send(`<!DOCTYPE html><html><body onload="document.forms[0].submit()">
     <p>Redirigiendo a Webpay...</p>
@@ -476,10 +481,7 @@ app.all("/api/webpay/return", async (req, res) => {
 
   const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
   const business = bizRows[0];
-  const { WebpayPlus, Options, Environment } = await getTransbank();
-  const tx = business.webpay_commerce_code && business.webpay_api_key
-    ? new WebpayPlus.Transaction(new Options(business.webpay_commerce_code, business.webpay_api_key, Environment.Production))
-    : WebpayPlus.Transaction.buildForIntegration();
+  const { tx } = await getWebpayTransaction(business);
 
   try {
     const result = await tx.commit(token);
