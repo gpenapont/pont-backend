@@ -10,6 +10,7 @@ import express from "express";
 import cors from "cors";
 import pkg from "pg";
 import "dotenv/config";
+import { WebpayPlus, Options, Environment } from "transbank-sdk";
 
 const { Pool } = pkg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -19,6 +20,27 @@ app.use(express.json());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 
 const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
+
+// URL pública de ESTE backend (para armar el link de vuelta que le pasamos a Transbank).
+// Configúrala en las variables de entorno de Railway.
+const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || "https://pont-backend-production.up.railway.app";
+
+// Crea la transacción en Transbank y devuelve el link que hay que mandarle al cliente.
+// Si el negocio no tiene credenciales propias cargadas, usa el ambiente de pruebas
+// (sandbox) que trae el SDK — sirve para probar todo el flujo sin ser comercio real todavía.
+async function createWebpayTransaction(business, order) {
+  const tx = business.webpay_commerce_code && business.webpay_api_key
+    ? new WebpayPlus.Transaction(new Options(business.webpay_commerce_code, business.webpay_api_key, Environment.Production))
+    : WebpayPlus.Transaction.buildForIntegration();
+
+  const buyOrder = order.id.replace(/-/g, "").slice(0, 20);
+  const returnUrl = `${PUBLIC_BACKEND_URL}/api/webpay/return`;
+  const response = await tx.create(buyOrder, order.conversation_id, order.total, returnUrl);
+
+  await pool.query("update orders set webpay_token = $1 where id = $2", [response.token, order.id]);
+
+  return `${PUBLIC_BACKEND_URL}/api/webpay/redirect/${response.token}`;
+}
 
 function formatBankDetails(b) {
   return [
@@ -33,11 +55,17 @@ function formatBankDetails(b) {
 function buildSystemPrompt(business, menuItems) {
   const menuText = menuItems.map((i) => `- ${i.name}: $${i.price.toLocaleString("es-CL")}`).join("\n");
   const hasBankDetails = !!business.bank_account_number;
+  const hasWebpay = !!business.webpay_enabled;
 
-  const paymentSection = hasBankDetails
-    ? `- Una vez confirmado, indica que el pago es por transferencia bancaria y comparte los datos escribiendo exactamente el marcador [DATOS_BANCARIOS] (nunca inventes un número de cuenta). Pide el comprobante.
-- Si el cliente dice que ya transfirió, agradece y explica que el equipo verificará el pago antes de preparar el pedido. Nunca confirmes tú que el pago fue recibido.`
-    : `- La forma de pago se coordina directamente al momento de la entrega o el intercambio. No inventes datos bancarios ni digital de pago que no tengas.`;
+  let paymentSection;
+  if (hasWebpay) {
+    paymentSection = `- Una vez confirmado, dile que le vas a enviar un link de pago seguro (Webpay) y escribe exactamente el marcador [LINK_PAGO] en su propia línea (nunca inventes una URL). El pago se confirma automáticamente al pagar, no hace falta pedir comprobante.`;
+  } else if (hasBankDetails) {
+    paymentSection = `- Una vez confirmado, indica que el pago es por transferencia bancaria y comparte los datos escribiendo exactamente el marcador [DATOS_BANCARIOS] (nunca inventes un número de cuenta). Pide el comprobante.
+- Si el cliente dice que ya transfirió, agradece y explica que el equipo verificará el pago antes de preparar el pedido. Nunca confirmes tú que el pago fue recibido.`;
+  } else {
+    paymentSection = `- La forma de pago se coordina directamente al momento de la entrega o el intercambio. No inventes datos bancarios ni digital de pago que no tengas.`;
+  }
 
   return `Eres el agente de pedidos de ${business.name}. Los clientes te escriben online, desde el sitio web o un link compartido.
 
@@ -123,6 +151,9 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     bank_account_number: business.bank_account_number,
     bank_rut: business.bank_rut,
     bank_email: business.bank_email,
+    webpay_enabled: business.webpay_enabled,
+    webpay_commerce_code: business.webpay_commerce_code,
+    webpay_api_key: business.webpay_api_key,
     menuItems,
   });
 });
@@ -131,11 +162,16 @@ app.put("/api/business/:slug/settings", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
 
-  const { greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email } = req.body;
+  const {
+    greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
+    webpay_enabled, webpay_commerce_code, webpay_api_key,
+  } = req.body;
   await pool.query(
     `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
-     bank_account_number=$5, bank_rut=$6, bank_email=$7 where id=$8`,
-    [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email, business.id]
+     bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10
+     where id=$11`,
+    [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
+     !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null, business.id]
   );
   res.json({ saved: true });
 });
@@ -272,19 +308,8 @@ app.post("/api/chat/:slug", async (req, res) => {
         parsedOrder = null;
       }
     }
-    replyText = replyText.replace(/\[DATOS_BANCARIOS\]/g, formatBankDetails(business));
-    if (!replyText.trim()) {
-      // Nunca guardar un mensaje vacío: eso confunde a Claude en el siguiente turno y genera un bucle.
-      replyText = parsedOrder && parsedOrder.confirmed
-        ? "¡Listo! Tu pedido quedó confirmado."
-        : "¿Me confirmas eso de nuevo?";
-    }
 
-    await pool.query("insert into messages (conversation_id, role, content) values ($1, 'assistant', $2)", [
-      conversation.id,
-      replyText,
-    ]);
-
+    // Guarda o actualiza el pedido PRIMERO, para tener su id disponible al armar el link de pago.
     let orderSnapshot = null;
     if (parsedOrder) {
       // Busca un pedido abierto para esta conversación (no pagado ni cancelado) y lo actualiza.
@@ -314,6 +339,31 @@ app.post("/api/chat/:slug", async (req, res) => {
         orderSnapshot = inserted.rows[0];
       }
     }
+
+    // Ahora sí, sustituir los marcadores — ya con el pedido guardado y su id disponible.
+    if (business.webpay_enabled && orderSnapshot && orderSnapshot.status === "confirmado" && !orderSnapshot.webpay_token) {
+      try {
+        const payLink = await createWebpayTransaction(business, orderSnapshot);
+        replyText = replyText.replace(/\[LINK_PAGO\]/g, payLink);
+      } catch (e) {
+        console.error("Error creando transacción Webpay:", e);
+        replyText = replyText.replace(/\[LINK_PAGO\]/g, "(no pudimos generar el link de pago, dinos si quieres que lo intentemos de nuevo)");
+      }
+    } else {
+      replyText = replyText.replace(/\[LINK_PAGO\]/g, "");
+    }
+    replyText = replyText.replace(/\[DATOS_BANCARIOS\]/g, formatBankDetails(business));
+    if (!replyText.trim()) {
+      // Nunca guardar un mensaje vacío: eso confunde a Claude en el siguiente turno y genera un bucle.
+      replyText = parsedOrder && parsedOrder.confirmed
+        ? "¡Listo! Tu pedido quedó confirmado."
+        : "¿Me confirmas eso de nuevo?";
+    }
+
+    await pool.query("insert into messages (conversation_id, role, content) values ($1, 'assistant', $2)", [
+      conversation.id,
+      replyText,
+    ]);
 
     res.json({ reply: replyText, order: orderSnapshot });
   } catch (err) {
@@ -376,6 +426,61 @@ app.delete("/api/orders/:orderId", async (req, res) => {
 
   await pool.query("delete from orders where id = $1", [req.params.orderId]);
   res.json({ deleted: true });
+});
+
+// Página intermedia: Transbank exige que la redirección al formulario de pago sea un
+// POST con el token, no un link directo. Esta página lo hace automáticamente.
+app.get("/api/webpay/redirect/:token", async (req, res) => {
+  const { rows } = await pool.query("select * from orders where webpay_token = $1", [req.params.token]);
+  const order = rows[0];
+  if (!order) return res.status(404).send("Pedido no encontrado");
+
+  const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
+  const business = bizRows[0];
+
+  const webpayUrl = business.webpay_commerce_code
+    ? "https://webpay3g.transbank.cl/webpayserver/initTransaction"
+    : "https://webpay3gint.transbank.cl/webpayserver/initTransaction";
+
+  res.send(`<!DOCTYPE html><html><body onload="document.forms[0].submit()">
+    <p>Redirigiendo a Webpay...</p>
+    <form method="POST" action="${webpayUrl}">
+      <input type="hidden" name="token_ws" value="${req.params.token}" />
+    </form>
+  </body></html>`);
+});
+
+// Transbank redirige aquí (GET o POST) después del pago. Confirmamos la transacción
+// y marcamos el pedido como pagado o rechazado según corresponda.
+app.all("/api/webpay/return", async (req, res) => {
+  const token = req.body.token_ws || req.query.token_ws;
+  if (!token) return res.status(400).send("Falta token_ws");
+
+  const { rows } = await pool.query("select * from orders where webpay_token = $1", [token]);
+  const order = rows[0];
+  if (!order) return res.status(404).send("Pedido no encontrado");
+
+  const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
+  const business = bizRows[0];
+  const tx = business.webpay_commerce_code && business.webpay_api_key
+    ? new WebpayPlus.Transaction(new Options(business.webpay_commerce_code, business.webpay_api_key, Environment.Production))
+    : WebpayPlus.Transaction.buildForIntegration();
+
+  try {
+    const result = await tx.commit(token);
+    const approved = result.status === "AUTHORIZED" || result.response_code === 0;
+    await pool.query("update orders set status = $1 where id = $2", [
+      approved ? "pago_verificado" : "cancelado",
+      order.id,
+    ]);
+    res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif; text-align:center; padding:60px 20px;">
+      <h2>${approved ? "¡Pago exitoso!" : "El pago no se pudo completar"}</h2>
+      <p>${approved ? "Ya puedes cerrar esta ventana y volver al chat." : "Puedes volver al chat e intentarlo de nuevo."}</p>
+    </body></html>`);
+  } catch (e) {
+    console.error("Error confirmando pago Webpay:", e);
+    res.status(500).send("Error al confirmar el pago");
+  }
 });
 
 const port = process.env.PORT || 3000;
