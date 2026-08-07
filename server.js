@@ -73,7 +73,7 @@ function formatBankDetails(b) {
   ].join("\n");
 }
 
-function buildSystemPrompt(business, menuItems) {
+function buildSystemPrompt(business, menuItems, customer) {
   const menuText = menuItems.map((i) => `- ${i.name}: $${i.price.toLocaleString("es-CL")}`).join("\n");
   const hasBankDetails = !!business.bank_account_number;
   const hasWebpay = !!business.webpay_enabled;
@@ -88,11 +88,21 @@ function buildSystemPrompt(business, menuItems) {
     paymentSection = `- La forma de pago se coordina directamente al momento de la entrega o el intercambio. No inventes datos bancarios ni digital de pago que no tengas.`;
   }
 
+  const knownName = customer && customer.name ? customer.name : null;
+  const knownAddress = customer && customer.last_address ? customer.last_address : null;
+  const customerSection = `Información que ya tienes de este cliente (de conversaciones o pedidos anteriores en este mismo canal):
+- Nombre: ${knownName ? knownName : "todavía no lo sabes"}
+- Última dirección de despacho usada: ${knownAddress ? knownAddress : "todavía no la sabes"}
+${knownName ? "Ya sabes su nombre, no se lo vuelvas a preguntar; puedes usarlo para dirigirte a él o ella de forma natural, sin abusar." : "No sabes su nombre todavía — pregúntaselo en algún momento natural y temprano de la conversación (no como si fuera un formulario), para poder incluirlo en el pedido."}
+${knownAddress ? `Ya tienes una dirección de despacho registrada. Si el cliente pide despacho, NO se la vuelvas a preguntar — menciónala directamente en el resumen (por ejemplo: "despacho a ${knownAddress}, ¿sigue siendo esa dirección?") y solo pide una nueva si te dice que cambió.` : ""}`;
+
   return `Eres el agente de pedidos de ${business.name}. Los clientes te escriben online, desde el sitio web o un link compartido.
 
 Importante: en la pantalla ya se le mostró este saludo al cliente antes de que escribiera, así que su primer mensaje puede ser una respuesta directa a lo que ahí se pregunta — interprétalo con ese contexto, no como un mensaje aislado. No vuelvas a saludar ni a presentar el negocio de nuevo en tu primera respuesta.
 
 Saludo que ya vio el cliente: "${business.greeting || ""}"
+
+${customerSection}
 
 ${business.system_prompt_extra || ""}
 
@@ -103,15 +113,16 @@ Tu trabajo:
 - Ayudar al cliente a elegir productos y calcular el total.
 - Responder en español neutro, amable pero sin modismos chilenos informales (nada de "bacán", "al tiro", "cachai", "po") y sin sonar tampoco excesivamente formal o robótico. Mantén las respuestas razonablemente breves, salvo que las instrucciones del negocio (más arriba) pidan un estilo más extenso, como explicaciones o recomendaciones detalladas. Sin markdown ni asteriscos.
 - Si el cliente indica que no quiere agregar nada más (por ejemplo "nada más", "eso es todo", "solo eso", "no gracias"), no vuelvas a preguntar si quiere algo más. Avanza directo al siguiente paso: si falta el tipo de entrega, pregúntalo; si ya lo tienes, resume el pedido completo y pide confirmación.
-- Antes de cerrar el pedido, pregunta si es despacho a domicilio o retiro en tienda. Si es despacho, pide dirección y comuna.
-- Después resume lo que llevan, el tipo de entrega y pregunta si está todo correcto.
+- Antes de cerrar el pedido, pregunta si es despacho a domicilio o retiro en tienda. Si es despacho y no tienes una dirección registrada (ver arriba), pide dirección y comuna.
+- Después resume lo que llevan, el nombre del cliente si lo sabes, el tipo de entrega con su dirección si aplica, y pregunta si está todo correcto.
 - Marcar el pedido como confirmado solo cuando el cliente lo confirme explícitamente.
 ${paymentSection}
 
 Formato obligatorio de cada respuesta:
 Primero tu respuesta al cliente en texto plano — esta parte nunca puede estar vacía, ni siquiera al confirmar el pedido, siempre debe haber un mensaje visible para el cliente. Después, en una línea aparte, agrega exactamente un bloque con el estado del pedido, así:
-<order>{"items":[{"name":"...","qty":1,"price":0}],"total":0,"delivery":{"type":"despacho","address":"..."},"payment":{"status":"pendiente"},"confirmed":false}</order>
+<order>{"customer_name":"...","items":[{"name":"...","qty":1,"price":0}],"total":0,"delivery":{"type":"despacho","address":"..."},"payment":{"status":"pendiente"},"confirmed":false}</order>
 
+El campo customer_name debe llevar el nombre del cliente apenas lo sepas (si ya lo sabías de antes, repítelo igual en cada bloque). Si aún no lo sabes, usa null.
 El campo payment.status puede ser: null, "pendiente" o "cliente_avisa_transferencia" (usa null si este negocio no cobra por transferencia).
 Si aún no saben el tipo de entrega, usa "delivery":null. Si aún no han pedido nada, usa items vacío y total 0. Este bloque nunca lo ve el cliente. Nunca lo omitas.`;
 }
@@ -270,6 +281,12 @@ app.post("/api/chat/:slug", async (req, res) => {
       [business.id]
     );
 
+    let { rows: customerRows } = await pool.query(
+      "select * from customers where business_id = $1 and session_id = $2",
+      [business.id, sessionId]
+    );
+    const customer = customerRows[0] || null;
+
     let { rows: convRows } = await pool.query(
       "select * from conversations where business_id = $1 and session_id = $2",
       [business.id, sessionId]
@@ -294,7 +311,7 @@ app.post("/api/chat/:slug", async (req, res) => {
     ]);
 
     const apiMessages = [...history, { role: "user", content: message }];
-    const systemPrompt = buildSystemPrompt(business, menuItems);
+    const systemPrompt = buildSystemPrompt(business, menuItems, customer);
 
     const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -330,6 +347,24 @@ app.post("/api/chat/:slug", async (req, res) => {
       }
     }
 
+    // Guarda lo que Claude haya aprendido de este cliente (nombre, dirección), para no
+    // volver a preguntarlo en la próxima conversación o pedido.
+    if (parsedOrder) {
+      const learnedName = parsedOrder.customer_name || null;
+      const learnedAddress = (parsedOrder.delivery && parsedOrder.delivery.address) || null;
+      if (learnedName || learnedAddress) {
+        await pool.query(
+          `insert into customers (business_id, session_id, name, last_address)
+           values ($1, $2, $3, $4)
+           on conflict (business_id, session_id) do update set
+             name = coalesce(excluded.name, customers.name),
+             last_address = coalesce(excluded.last_address, customers.last_address),
+             updated_at = now()`,
+          [business.id, sessionId, learnedName, learnedAddress]
+        );
+      }
+    }
+
     // Guarda o actualiza el pedido PRIMERO, para tener su id disponible al armar el link de pago.
     let orderSnapshot = null;
     if (parsedOrder) {
@@ -342,20 +377,21 @@ app.post("/api/chat/:slug", async (req, res) => {
       );
       const status = deriveOrderStatus(parsedOrder);
       const delivery = parsedOrder.delivery || {};
+      const customerName = parsedOrder.customer_name || (customer && customer.name) || null;
 
       if (openOrders[0]) {
         const updated = await pool.query(
-          `update orders set items=$1, total=$2, delivery_type=$3, delivery_address=$4, status=$5,
+          `update orders set items=$1, total=$2, delivery_type=$3, delivery_address=$4, status=$5, customer_name=$6,
            confirmed_at = case when confirmed_at is null and $5 <> 'draft' then now() else confirmed_at end
-           where id=$6 returning *`,
-          [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, openOrders[0].id]
+           where id=$7 returning *`,
+          [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, openOrders[0].id]
         );
         orderSnapshot = updated.rows[0];
       } else if (status !== "draft" || (parsedOrder.items || []).length > 0) {
         const inserted = await pool.query(
-          `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, confirmed_at)
-           values ($1,$2,$3,$4,$5,$6,$7, case when $7 <> 'draft' then now() else null end) returning *`,
-          [business.id, conversation.id, JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status]
+          `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, customer_name, confirmed_at)
+           values ($1,$2,$3,$4,$5,$6,$7,$8, case when $7 <> 'draft' then now() else null end) returning *`,
+          [business.id, conversation.id, JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName]
         );
         orderSnapshot = inserted.rows[0];
       }
