@@ -249,15 +249,17 @@ app.get("/api/business/:slug/orders", async (req, res) => {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
-  const { rows } = await pool.query("select * from orders where business_id = $1 order by created_at desc limit 100", [
-    biz.id,
-  ]);
+  const { rows } = await pool.query(
+    "select * from orders where business_id = $1 and status != 'draft' order by created_at desc limit 100",
+    [biz.id]
+  );
   res.json(rows);
 });
 
-// El negocio marca manualmente que verificó la transferencia en su cuenta. Misma clave.
+// El negocio marca manualmente que verificó la transferencia en su cuenta, o cambia el estado
+// a cualquier otro valor válido. Misma clave.
 app.patch("/api/orders/:orderId/status", async (req, res) => {
-  const { status } = req.body; // 'pago_verificado' o 'cancelado'
+  const { status } = req.body; // 'draft' | 'confirmado' | 'pago_avisado' | 'pago_verificado' | 'cancelado'
   const { rows: orderRows } = await pool.query(
     "select o.id, b.dashboard_password from orders o join businesses b on b.id = o.business_id where o.id = $1",
     [req.params.orderId]
@@ -273,6 +275,22 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
     req.params.orderId,
   ]);
   res.json(rows[0]);
+});
+
+// El negocio elimina un pedido por completo (por ejemplo, un pedido de prueba o duplicado). Misma clave.
+app.delete("/api/orders/:orderId", async (req, res) => {
+  const { rows: orderRows } = await pool.query(
+    "select o.id, b.dashboard_password from orders o join businesses b on b.id = o.business_id where o.id = $1",
+    [req.params.orderId]
+  );
+  const row = orderRows[0];
+  if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
+  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password) {
+    return res.status(401).json({ error: "Clave incorrecta" });
+  }
+
+  await pool.query("delete from orders where id = $1", [req.params.orderId]);
+  res.json({ deleted: true });
 });
 
 const port = process.env.PORT || 3000;
