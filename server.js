@@ -18,8 +18,8 @@ const app = express();
 app.use(express.json());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || "").trim();
+const GOOGLE_CLIENT_SECRET = (process.env.GOOGLE_CLIENT_SECRET || "").trim();
 const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
 
 // Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
@@ -851,4 +851,8 @@ app.post("/api/business/:slug/google/toggle", async (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`PONT backend escuchando en :${port}`));
+app.listen(port, () => {
+  console.log(`PONT backend escuchando en :${port}`);
+  console.log(`GOOGLE_CLIENT_ID cargado: ${GOOGLE_CLIENT_ID ? "sí (" + GOOGLE_CLIENT_ID.length + " caracteres)" : "NO"}`);
+  console.log(`GOOGLE_CLIENT_SECRET cargado: ${GOOGLE_CLIENT_SECRET ? "sí (" + GOOGLE_CLIENT_SECRET.length + " caracteres)" : "NO"}`);
+});
