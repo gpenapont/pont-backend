@@ -150,6 +150,44 @@ app.get("/api/business/:slug", async (req, res) => {
   res.json({ slug: business.slug, name: business.name, greeting: business.greeting, menuItems });
 });
 
+// Autoregistro: crea un negocio nuevo sin intervención manual. Protegido con un código de
+// invitación simple (para que no cualquiera en internet cree negocios), no con la clave del panel
+// (esa la elige el propio negocio en este mismo formulario).
+app.post("/api/business/signup", async (req, res) => {
+  const { name, password, invite_code } = req.body;
+  if (process.env.SIGNUP_INVITE_CODE && invite_code !== process.env.SIGNUP_INVITE_CODE) {
+    return res.status(401).json({ error: "Código de invitación incorrecto" });
+  }
+  if (!name || !name.trim() || !password || !password.trim()) {
+    return res.status(400).json({ error: "Falta el nombre del negocio o la clave" });
+  }
+
+  const baseSlug = name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quita tildes
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "negocio";
+
+  let slug = baseSlug;
+  let suffix = 1;
+  while (true) {
+    const { rows } = await pool.query("select 1 from businesses where slug = $1", [slug]);
+    if (!rows[0]) break;
+    suffix += 1;
+    slug = `${baseSlug}-${suffix}`;
+  }
+
+  await pool.query(
+    `insert into businesses (slug, name, dashboard_password, greeting)
+     values ($1, $2, $3, $4)`,
+    [slug, name.trim(), password.trim(), `¡Bienvenido a ${name.trim()}! Cuéntanos qué buscas y te ayudamos a encontrarlo.`]
+  );
+
+  res.json({ slug });
+});
+
 // Helper compartido: busca el negocio por slug y valida la clave del panel (header x-dashboard-key).
 // Devuelve la fila del negocio si todo bien, o null y ya responde el error si no.
 async function getBusinessWithAuth(req, res) {
