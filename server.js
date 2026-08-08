@@ -18,6 +18,77 @@ const app = express();
 app.use(express.json());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
+
+// Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
+async function getGoogleAccessToken(business) {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      refresh_token: business.google_refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error("No se pudo refrescar el token de Google: " + JSON.stringify(data));
+  return data.access_token;
+}
+
+// Escribe o actualiza la fila de un pedido en la planilla del negocio. Nunca revienta el flujo
+// del chat si algo falla — se llama siempre "en paralelo", sin bloquear la respuesta al cliente.
+async function syncOrderToSheet(business, order) {
+  if (!business.google_sheets_enabled || !business.google_refresh_token || !business.google_spreadsheet_id) return;
+
+  const accessToken = await getGoogleAccessToken(business);
+  const sheetId = business.google_spreadsheet_id;
+  const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+
+  // Busca si ya existe una fila para este pedido (columna G = ID Pedido).
+  const getRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Pedidos!G2:G10000`,
+    { headers }
+  );
+  const getData = await getRes.json();
+  const ids = (getData.values || []).map((r) => r[0]);
+  const rowIndex = ids.findIndex((id) => id === order.id);
+
+  const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
+  const entrega = order.delivery_type === "despacho" ? `Despacho: ${order.delivery_address || ""}` : (order.delivery_type === "retiro" ? "Retiro" : "");
+  const row = [
+    new Date(order.created_at || Date.now()).toLocaleString("es-CL"),
+    order.customer_name || "",
+    items,
+    order.total || 0,
+    entrega,
+    order.status,
+    order.id,
+  ];
+
+  if (rowIndex === -1) {
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Pedidos!A1:append?valueInputOption=USER_ENTERED`,
+      { method: "POST", headers, body: JSON.stringify({ values: [row] }) }
+    );
+  } else {
+    const sheetRow = rowIndex + 2; // +2: la fila 1 es encabezado, y los índices de Sheets empiezan en 1
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Pedidos!A${sheetRow}:G${sheetRow}?valueInputOption=USER_ENTERED`,
+      { method: "PUT", headers, body: JSON.stringify({ values: [row] }) }
+    );
+  }
+}
+
+// Nunca dejar que un problema con Sheets rompa el flujo real del pedido.
+function syncOrderToSheetSafe(business, order) {
+  if (!order) return;
+  syncOrderToSheet(business, order).catch((e) => console.error("Error sincronizando con Google Sheets:", e));
+}
+
 const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
 
 // URL pública de ESTE backend (para armar el link de vuelta que le pasamos a Transbank).
@@ -227,6 +298,9 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     webpay_api_key: business.webpay_api_key,
     whatsapp_phone_number_id: business.whatsapp_phone_number_id,
     whatsapp_access_token: business.whatsapp_access_token,
+    google_sheets_enabled: business.google_sheets_enabled,
+    google_spreadsheet_url: business.google_spreadsheet_url,
+    google_email: business.google_email,
     bot_paused: business.bot_paused,
     pause_schedule_enabled: business.pause_schedule_enabled,
     pause_schedule: business.pause_schedule,
@@ -460,6 +534,7 @@ async function processMessage(business, sessionId, message) {
     replyText,
   ]);
 
+  syncOrderToSheetSafe(business, orderSnapshot);
   return { replyText, order: orderSnapshot };
 }
 
@@ -505,7 +580,7 @@ app.get("/api/business/:slug/orders", async (req, res) => {
 app.patch("/api/orders/:orderId/status", async (req, res) => {
   const { status } = req.body; // 'draft' | 'confirmado' | 'pago_avisado' | 'pago_verificado' | 'cancelado'
   const { rows: orderRows } = await pool.query(
-    "select o.id, b.dashboard_password from orders o join businesses b on b.id = o.business_id where o.id = $1",
+    "select o.id, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
     [req.params.orderId]
   );
   const row = orderRows[0];
@@ -518,6 +593,7 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
     status,
     req.params.orderId,
   ]);
+  syncOrderToSheetSafe(row, rows[0]);
   res.json(rows[0]);
 });
 
@@ -684,6 +760,93 @@ app.post("/api/whatsapp/webhook", async (req, res) => {
   } catch (err) {
     console.error("Error procesando webhook de WhatsApp:", err);
   }
+});
+
+// Google redirige aquí después de que el negocio autoriza el acceso. El "state" lleva el slug
+// del negocio (lo arma el propio panel al construir el link de autorización).
+app.get("/api/google/callback", async (req, res) => {
+  const { code, state, error } = req.query;
+  const slug = state;
+  const redirectBase = `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${slug}`;
+
+  if (error || !code) {
+    return res.redirect(`${redirectBase}&google=error`);
+  }
+
+  try {
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: `${PUBLIC_BACKEND_URL}/api/google/callback`,
+        grant_type: "authorization_code",
+      }),
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.refresh_token) {
+      console.error("Error obteniendo tokens de Google:", tokenData);
+      return res.redirect(`${redirectBase}&google=error`);
+    }
+
+    const userInfoRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const userInfo = await userInfoRes.json();
+
+    // Crea una planilla nueva, ya con encabezados, en la cuenta de Drive del negocio.
+    const createRes = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenData.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        properties: { title: `Pedidos PONT` },
+        sheets: [{ properties: { title: "Pedidos" } }],
+      }),
+    });
+    const sheet = await createRes.json();
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheet.spreadsheetId}/values/Pedidos!A1:G1?valueInputOption=USER_ENTERED`,
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${tokenData.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ values: [SHEET_HEADERS] }),
+      }
+    );
+
+    await pool.query(
+      `update businesses set google_refresh_token=$1, google_spreadsheet_id=$2, google_spreadsheet_url=$3,
+       google_email=$4, google_sheets_enabled=true where slug=$5`,
+      [tokenData.refresh_token, sheet.spreadsheetId, sheet.spreadsheetUrl, userInfo.email || null, slug]
+    );
+
+    res.redirect(`${redirectBase}&google=connected`);
+  } catch (e) {
+    console.error("Error en callback de Google:", e);
+    res.redirect(`${redirectBase}&google=error`);
+  }
+});
+
+// Desconectar Google Sheets de un negocio. Protegido con la clave del panel.
+app.post("/api/business/:slug/google/disconnect", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+  await pool.query(
+    `update businesses set google_refresh_token=null, google_spreadsheet_id=null, google_spreadsheet_url=null,
+     google_email=null, google_sheets_enabled=false where id=$1`,
+    [business.id]
+  );
+  res.json({ disconnected: true });
+});
+
+// Prender o apagar la sincronización sin desconectar la cuenta.
+app.post("/api/business/:slug/google/toggle", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+  const { enabled } = req.body;
+  await pool.query("update businesses set google_sheets_enabled=$1 where id=$2", [!!enabled, business.id]);
+  res.json({ saved: true });
 });
 
 const port = process.env.PORT || 3000;
