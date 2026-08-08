@@ -770,6 +770,7 @@ app.get("/api/google/callback", async (req, res) => {
   const redirectBase = `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${slug}`;
 
   if (error || !code) {
+    console.log("Google callback con error o sin code:", { error, hasCode: !!code, FRONTEND_APP_URL: process.env.FRONTEND_APP_URL });
     return res.redirect(`${redirectBase}&google=error`);
   }
 
