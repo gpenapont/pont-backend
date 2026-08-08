@@ -187,6 +187,11 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     webpay_enabled: business.webpay_enabled,
     webpay_commerce_code: business.webpay_commerce_code,
     webpay_api_key: business.webpay_api_key,
+    whatsapp_phone_number_id: business.whatsapp_phone_number_id,
+    whatsapp_access_token: business.whatsapp_access_token,
+    bot_paused: business.bot_paused,
+    pause_schedule_enabled: business.pause_schedule_enabled,
+    pause_schedule: business.pause_schedule,
     menuItems,
   });
 });
@@ -198,13 +203,18 @@ app.put("/api/business/:slug/settings", async (req, res) => {
   const {
     greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
     webpay_enabled, webpay_commerce_code, webpay_api_key,
+    whatsapp_phone_number_id, whatsapp_access_token,
+    bot_paused, pause_schedule_enabled, pause_schedule,
   } = req.body;
   await pool.query(
     `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
-     bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10
-     where id=$11`,
+     bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10,
+     whatsapp_phone_number_id=$11, whatsapp_access_token=$12, bot_paused=$13, pause_schedule_enabled=$14, pause_schedule=$15
+     where id=$16`,
     [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
-     !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null, business.id]
+     !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null,
+     whatsapp_phone_number_id || null, whatsapp_access_token || null,
+     !!bot_paused, !!pause_schedule_enabled, JSON.stringify(pause_schedule || {}), business.id]
   );
   res.json({ saved: true });
 });
@@ -267,6 +277,154 @@ app.get("/api/chat/:slug/history", async (req, res) => {
   res.json({ messages, order: openOrders[0] || null });
 });
 
+// Procesa un mensaje entrante y devuelve la respuesta — la usan tanto el chat web
+// como WhatsApp, así la lógica de negocio vive en un solo lugar.
+async function processMessage(business, sessionId, message) {
+  const { rows: menuItems } = await pool.query(
+    "select name, price from menu_items where business_id = $1 and active = true order by category, name",
+    [business.id]
+  );
+
+  const { rows: customerRows } = await pool.query(
+    "select * from customers where business_id = $1 and session_id = $2",
+    [business.id, sessionId]
+  );
+  const customer = customerRows[0] || null;
+
+  let { rows: convRows } = await pool.query(
+    "select * from conversations where business_id = $1 and session_id = $2",
+    [business.id, sessionId]
+  );
+  let conversation = convRows[0];
+  if (!conversation) {
+    const inserted = await pool.query(
+      "insert into conversations (business_id, session_id) values ($1, $2) returning *",
+      [business.id, sessionId]
+    );
+    conversation = inserted.rows[0];
+  }
+
+  const { rows: history } = await pool.query(
+    "select role, content from messages where conversation_id = $1 order by created_at asc",
+    [conversation.id]
+  );
+
+  await pool.query("insert into messages (conversation_id, role, content) values ($1, 'user', $2)", [
+    conversation.id,
+    message,
+  ]);
+
+  const apiMessages = [...history, { role: "user", content: message }];
+  const systemPrompt = buildSystemPrompt(business, menuItems, customer);
+
+  const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1000,
+      system: systemPrompt,
+      messages: apiMessages,
+    }),
+  });
+  const data = await anthropicRes.json();
+  if (!anthropicRes.ok || data.type === "error") {
+    console.error("Error de Anthropic:", anthropicRes.status, JSON.stringify(data));
+    return { replyText: "Perdona, tuvimos un problema técnico. ¿Puedes intentar de nuevo?", order: null };
+  }
+  const textBlock = (data.content || []).find((b) => b.type === "text");
+  const rawText = textBlock ? textBlock.text : "";
+
+  const match = rawText.match(/<order>([\s\S]*?)<\/order>/);
+  let replyText = rawText.trim();
+  let parsedOrder = null;
+  if (match) {
+    replyText = rawText.slice(0, match.index).trim();
+    try {
+      parsedOrder = JSON.parse(match[1].trim());
+    } catch (e) {
+      parsedOrder = null;
+    }
+  }
+
+  // Guarda lo que Claude haya aprendido de este cliente (nombre, dirección), para no
+  // volver a preguntarlo en la próxima conversación o pedido.
+  if (parsedOrder) {
+    const learnedName = parsedOrder.customer_name || null;
+    const learnedAddress = (parsedOrder.delivery && parsedOrder.delivery.address) || null;
+    if (learnedName || learnedAddress) {
+      await pool.query(
+        `insert into customers (business_id, session_id, name, last_address)
+         values ($1, $2, $3, $4)
+         on conflict (business_id, session_id) do update set
+           name = coalesce(excluded.name, customers.name),
+           last_address = coalesce(excluded.last_address, customers.last_address),
+           updated_at = now()`,
+        [business.id, sessionId, learnedName, learnedAddress]
+      );
+    }
+  }
+
+  // Guarda o actualiza el pedido PRIMERO, para tener su id disponible al armar el link de pago.
+  let orderSnapshot = null;
+  if (parsedOrder) {
+    const { rows: openOrders } = await pool.query(
+      "select * from orders where conversation_id = $1 and status not in ('pago_verificado', 'cancelado') order by created_at desc limit 1",
+      [conversation.id]
+    );
+    const status = deriveOrderStatus(parsedOrder);
+    const delivery = parsedOrder.delivery || {};
+    const customerName = parsedOrder.customer_name || (customer && customer.name) || null;
+
+    if (openOrders[0]) {
+      const updated = await pool.query(
+        `update orders set items=$1, total=$2, delivery_type=$3, delivery_address=$4, status=$5, customer_name=$6,
+         confirmed_at = case when confirmed_at is null and $5 <> 'draft' then now() else confirmed_at end
+         where id=$7 returning *`,
+        [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, openOrders[0].id]
+      );
+      orderSnapshot = updated.rows[0];
+    } else if (status !== "draft" || (parsedOrder.items || []).length > 0) {
+      const inserted = await pool.query(
+        `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, customer_name, confirmed_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8, case when $7 <> 'draft' then now() else null end) returning *`,
+        [business.id, conversation.id, JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName]
+      );
+      orderSnapshot = inserted.rows[0];
+    }
+  }
+
+  // Ahora sí, sustituir los marcadores — ya con el pedido guardado y su id disponible.
+  if (business.webpay_enabled && orderSnapshot && orderSnapshot.status === "confirmado" && !orderSnapshot.webpay_token) {
+    try {
+      const payLink = await createWebpayTransaction(business, orderSnapshot);
+      replyText = replyText.replace(/\[LINK_PAGO\]/g, payLink);
+    } catch (e) {
+      console.error("Error creando transacción Webpay:", e);
+      replyText = replyText.replace(/\[LINK_PAGO\]/g, "(no pudimos generar el link de pago, dinos si quieres que lo intentemos de nuevo)");
+    }
+  } else {
+    replyText = replyText.replace(/\[LINK_PAGO\]/g, "");
+  }
+  replyText = replyText.replace(/\[DATOS_BANCARIOS\]/g, formatBankDetails(business));
+  if (!replyText.trim()) {
+    replyText = parsedOrder && parsedOrder.confirmed
+      ? "¡Listo! Tu pedido quedó confirmado."
+      : "¿Me confirmas eso de nuevo?";
+  }
+
+  await pool.query("insert into messages (conversation_id, role, content) values ($1, 'assistant', $2)", [
+    conversation.id,
+    replyText,
+  ]);
+
+  return { replyText, order: orderSnapshot };
+}
+
 app.post("/api/chat/:slug", async (req, res) => {
   const { slug } = req.params;
   const { sessionId, message } = req.body;
@@ -277,153 +435,8 @@ app.post("/api/chat/:slug", async (req, res) => {
     const business = businessRows[0];
     if (!business) return res.status(404).json({ error: "Negocio no encontrado" });
 
-    const { rows: menuItems } = await pool.query(
-      "select name, price from menu_items where business_id = $1 and active = true order by category, name",
-      [business.id]
-    );
-
-    let { rows: customerRows } = await pool.query(
-      "select * from customers where business_id = $1 and session_id = $2",
-      [business.id, sessionId]
-    );
-    const customer = customerRows[0] || null;
-
-    let { rows: convRows } = await pool.query(
-      "select * from conversations where business_id = $1 and session_id = $2",
-      [business.id, sessionId]
-    );
-    let conversation = convRows[0];
-    if (!conversation) {
-      const inserted = await pool.query(
-        "insert into conversations (business_id, session_id) values ($1, $2) returning *",
-        [business.id, sessionId]
-      );
-      conversation = inserted.rows[0];
-    }
-
-    const { rows: history } = await pool.query(
-      "select role, content from messages where conversation_id = $1 order by created_at asc",
-      [conversation.id]
-    );
-
-    await pool.query("insert into messages (conversation_id, role, content) values ($1, 'user', $2)", [
-      conversation.id,
-      message,
-    ]);
-
-    const apiMessages = [...history, { role: "user", content: message }];
-    const systemPrompt = buildSystemPrompt(business, menuItems, customer);
-
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 1000,
-        system: systemPrompt,
-        messages: apiMessages,
-      }),
-    });
-    const data = await anthropicRes.json();
-    if (!anthropicRes.ok || data.type === "error") {
-      console.error("Error de Anthropic:", anthropicRes.status, JSON.stringify(data));
-      return res.status(502).json({ error: "Error al llamar a Claude", detail: data.error || data });
-    }
-    const textBlock = (data.content || []).find((b) => b.type === "text");
-    const rawText = textBlock ? textBlock.text : "";
-
-    const match = rawText.match(/<order>([\s\S]*?)<\/order>/);
-    let replyText = rawText.trim();
-    let parsedOrder = null;
-    if (match) {
-      replyText = rawText.slice(0, match.index).trim();
-      try {
-        parsedOrder = JSON.parse(match[1].trim());
-      } catch (e) {
-        parsedOrder = null;
-      }
-    }
-
-    // Guarda lo que Claude haya aprendido de este cliente (nombre, dirección), para no
-    // volver a preguntarlo en la próxima conversación o pedido.
-    if (parsedOrder) {
-      const learnedName = parsedOrder.customer_name || null;
-      const learnedAddress = (parsedOrder.delivery && parsedOrder.delivery.address) || null;
-      if (learnedName || learnedAddress) {
-        await pool.query(
-          `insert into customers (business_id, session_id, name, last_address)
-           values ($1, $2, $3, $4)
-           on conflict (business_id, session_id) do update set
-             name = coalesce(excluded.name, customers.name),
-             last_address = coalesce(excluded.last_address, customers.last_address),
-             updated_at = now()`,
-          [business.id, sessionId, learnedName, learnedAddress]
-        );
-      }
-    }
-
-    // Guarda o actualiza el pedido PRIMERO, para tener su id disponible al armar el link de pago.
-    let orderSnapshot = null;
-    if (parsedOrder) {
-      // Busca un pedido abierto para esta conversación (no pagado ni cancelado) y lo actualiza.
-      // Solo se crea una fila nueva si no hay ninguna abierta todavía. Esto es lo que permite
-      // que un aviso de pago posterior ("ya transferí") se enlace de vuelta al mismo pedido.
-      const { rows: openOrders } = await pool.query(
-        "select * from orders where conversation_id = $1 and status not in ('pago_verificado', 'cancelado') order by created_at desc limit 1",
-        [conversation.id]
-      );
-      const status = deriveOrderStatus(parsedOrder);
-      const delivery = parsedOrder.delivery || {};
-      const customerName = parsedOrder.customer_name || (customer && customer.name) || null;
-
-      if (openOrders[0]) {
-        const updated = await pool.query(
-          `update orders set items=$1, total=$2, delivery_type=$3, delivery_address=$4, status=$5, customer_name=$6,
-           confirmed_at = case when confirmed_at is null and $5 <> 'draft' then now() else confirmed_at end
-           where id=$7 returning *`,
-          [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, openOrders[0].id]
-        );
-        orderSnapshot = updated.rows[0];
-      } else if (status !== "draft" || (parsedOrder.items || []).length > 0) {
-        const inserted = await pool.query(
-          `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, customer_name, confirmed_at)
-           values ($1,$2,$3,$4,$5,$6,$7,$8, case when $7 <> 'draft' then now() else null end) returning *`,
-          [business.id, conversation.id, JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName]
-        );
-        orderSnapshot = inserted.rows[0];
-      }
-    }
-
-    // Ahora sí, sustituir los marcadores — ya con el pedido guardado y su id disponible.
-    if (business.webpay_enabled && orderSnapshot && orderSnapshot.status === "confirmado" && !orderSnapshot.webpay_token) {
-      try {
-        const payLink = await createWebpayTransaction(business, orderSnapshot);
-        replyText = replyText.replace(/\[LINK_PAGO\]/g, payLink);
-      } catch (e) {
-        console.error("Error creando transacción Webpay:", e);
-        replyText = replyText.replace(/\[LINK_PAGO\]/g, "(no pudimos generar el link de pago, dinos si quieres que lo intentemos de nuevo)");
-      }
-    } else {
-      replyText = replyText.replace(/\[LINK_PAGO\]/g, "");
-    }
-    replyText = replyText.replace(/\[DATOS_BANCARIOS\]/g, formatBankDetails(business));
-    if (!replyText.trim()) {
-      // Nunca guardar un mensaje vacío: eso confunde a Claude en el siguiente turno y genera un bucle.
-      replyText = parsedOrder && parsedOrder.confirmed
-        ? "¡Listo! Tu pedido quedó confirmado."
-        : "¿Me confirmas eso de nuevo?";
-    }
-
-    await pool.query("insert into messages (conversation_id, role, content) values ($1, 'assistant', $2)", [
-      conversation.id,
-      replyText,
-    ]);
-
-    res.json({ reply: replyText, order: orderSnapshot });
+    const { replyText, order } = await processMessage(business, sessionId, message);
+    res.json({ reply: replyText, order });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error interno" });
@@ -534,6 +547,104 @@ app.all("/api/webpay/return", async (req, res) => {
   } catch (e) {
     console.error("Error confirmando pago Webpay:", e);
     res.status(500).send("Error al confirmar el pago");
+  }
+});
+
+// Envía un mensaje de WhatsApp usando la API de Meta (Cloud API), con el número y token propios del negocio.
+async function sendWhatsappMessage(business, to, text) {
+  const res = await fetch(`https://graph.facebook.com/v21.0/${business.whatsapp_phone_number_id}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${business.whatsapp_access_token}`,
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type: "text",
+      text: { body: text },
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error("Error enviando mensaje de WhatsApp:", res.status, err);
+  }
+}
+
+// Decide si el bot debe quedarse callado en este momento (para que el negocio conteste a mano
+// desde su propio celular). Dos formas de pausarlo: manual (switch en el panel) o por horario semanal.
+function isBotPaused(business) {
+  if (business.bot_paused) return true;
+  if (!business.pause_schedule_enabled) return false;
+
+  const schedule = business.pause_schedule || {};
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Santiago",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+
+  const dayMap = { Sun: "sun", Mon: "mon", Tue: "tue", Wed: "wed", Thu: "thu", Fri: "fri", Sat: "sat" };
+  const day = dayMap[parts.find((p) => p.type === "weekday").value];
+  const hour = parseInt(parts.find((p) => p.type === "hour").value, 10);
+  const minute = parseInt(parts.find((p) => p.type === "minute").value, 10);
+  const currentMinutes = hour * 60 + minute;
+
+  const window = schedule[day];
+  if (!window || !window.start || !window.end) return false;
+  const [sh, sm] = window.start.split(":").map(Number);
+  const [eh, em] = window.end.split(":").map(Number);
+  return currentMinutes >= sh * 60 + sm && currentMinutes < eh * 60 + em;
+}
+
+// Meta llama esto UNA VEZ, al configurar el webhook en el panel de su app, para verificar
+// que el servidor es tuyo. Hay que responder con el "challenge" tal cual si el token coincide.
+app.get("/api/whatsapp/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
+});
+
+// Acá llegan los mensajes reales de WhatsApp. Meta identifica el número al que le escribieron
+// (phone_number_id) — con eso buscamos a qué negocio pertenece y usamos el mismo motor del chat web.
+app.post("/api/whatsapp/webhook", async (req, res) => {
+  res.sendStatus(200); // Confirmar recepción rápido; Meta reintenta si no respondes a tiempo.
+
+  try {
+    const entry = req.body.entry && req.body.entry[0];
+    const change = entry && entry.changes && entry.changes[0];
+    const value = change && change.value;
+    const incomingMessage = value && value.messages && value.messages[0];
+    if (!incomingMessage || incomingMessage.type !== "text") return; // ignora estados de entrega, etc.
+
+    const phoneNumberId = value.metadata.phone_number_id;
+    const from = incomingMessage.from; // número del cliente, en formato internacional sin '+'
+    const text = incomingMessage.text.body;
+
+    const { rows: businessRows } = await pool.query(
+      "select * from businesses where whatsapp_phone_number_id = $1",
+      [phoneNumberId]
+    );
+    const business = businessRows[0];
+    if (!business) {
+      console.error("Mensaje de WhatsApp para un phone_number_id sin negocio asociado:", phoneNumberId);
+      return;
+    }
+
+    if (isBotPaused(business)) return; // El negocio está atendiendo a mano en este momento, el bot no interviene.
+
+    const { replyText } = await processMessage(business, `whatsapp-${from}`, text);
+    await sendWhatsappMessage(business, from, replyText);
+  } catch (err) {
+    console.error("Error procesando webhook de WhatsApp:", err);
   }
 });
 
