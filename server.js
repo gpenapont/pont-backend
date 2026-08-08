@@ -20,6 +20,8 @@ app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || "").trim();
 const GOOGLE_CLIENT_SECRET = (process.env.GOOGLE_CLIENT_SECRET || "").trim();
+const FACEBOOK_APP_ID = (process.env.FACEBOOK_APP_ID || "").trim();
+const FACEBOOK_APP_SECRET = (process.env.FACEBOOK_APP_SECRET || "").trim();
 const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
 
 // Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
@@ -600,7 +602,7 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
 // El negocio elimina un pedido por completo (por ejemplo, un pedido de prueba o duplicado). Misma clave.
 app.delete("/api/orders/:orderId", async (req, res) => {
   const { rows: orderRows } = await pool.query(
-    "select o.id, b.dashboard_password from orders o join businesses b on b.id = o.business_id where o.id = $1",
+    "select o.id, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
     [req.params.orderId]
   );
   const row = orderRows[0];
@@ -609,7 +611,12 @@ app.delete("/api/orders/:orderId", async (req, res) => {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
-  await pool.query("delete from orders where id = $1", [req.params.orderId]);
+  // No se borra de verdad: se marca como "eliminado", así el pedido nunca desaparece de golpe
+  // de un lado (el panel o la planilla) mientras sigue existiendo en el otro.
+  const { rows } = await pool.query("update orders set status = 'eliminado' where id = $1 returning *", [
+    req.params.orderId,
+  ]);
+  syncOrderToSheetSafe(row, rows[0]);
   res.json({ deleted: true });
 });
 
@@ -848,6 +855,42 @@ app.post("/api/business/:slug/google/toggle", async (req, res) => {
   const { enabled } = req.body;
   await pool.query("update businesses set google_sheets_enabled=$1 where id=$2", [!!enabled, business.id]);
   res.json({ saved: true });
+});
+
+// Termina la conexión de WhatsApp Embedded Signup: cambia el "code" que dio el navegador por un
+// token real, suscribe nuestra app a los mensajes de esa cuenta, y guarda el phone_number_id + token.
+app.post("/api/business/:slug/whatsapp/connect", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { code, phoneNumberId, wabaId } = req.body;
+  if (!code || !phoneNumberId || !wabaId) return res.status(400).json({ error: "Faltan datos de la conexión" });
+
+  try {
+    const tokenRes = await fetch(
+      `https://graph.facebook.com/v23.0/oauth/access_token?client_id=${FACEBOOK_APP_ID}&client_secret=${FACEBOOK_APP_SECRET}&code=${code}`
+    );
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.access_token) {
+      console.error("Error cambiando el code de WhatsApp por un token:", tokenData);
+      return res.status(502).json({ error: "No se pudo validar la conexión con Meta" });
+    }
+
+    // Sin esto, los mensajes de esa cuenta nunca llegarían a nuestro webhook.
+    await fetch(`https://graph.facebook.com/v23.0/${wabaId}/subscribed_apps`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+
+    await pool.query(
+      "update businesses set whatsapp_phone_number_id=$1, whatsapp_access_token=$2 where id=$3",
+      [phoneNumberId, tokenData.access_token, business.id]
+    );
+    res.json({ connected: true });
+  } catch (e) {
+    console.error("Error conectando WhatsApp:", e);
+    res.status(500).json({ error: "Error interno" });
+  }
 });
 
 const port = process.env.PORT || 3000;
