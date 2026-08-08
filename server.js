@@ -365,6 +365,45 @@ app.delete("/api/business/:slug/menu-items/:itemId", async (req, res) => {
   res.json({ deleted: true });
 });
 
+// Interpreta texto pegado con un producto por línea: "Nombre, Precio, Categoría" o el mismo
+// formato separado por tabulaciones (lo que queda al copiar y pegar directo desde Excel o Sheets).
+function parseCatalogText(text) {
+  const lines = (text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const items = [];
+  for (const line of lines) {
+    const parts = line.includes("\t") ? line.split("\t") : line.split(",");
+    const name = (parts[0] || "").trim();
+    const priceDigits = (parts[1] || "").replace(/[^\d]/g, "");
+    const price = parseInt(priceDigits, 10);
+    const category = (parts[2] || "").trim() || null;
+    if (name && price) items.push({ name, price, category });
+  }
+  return items;
+}
+
+// Reemplaza TODO el catálogo del negocio de una sola vez, a partir de texto pegado
+// (ideal para un cliente básico: copia su lista desde Excel/Sheets y la pega directo).
+app.put("/api/business/:slug/menu-items/bulk", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const items = parseCatalogText(req.body.text);
+  if (items.length === 0) {
+    return res.status(400).json({ error: "No se reconoció ningún producto en el texto pegado" });
+  }
+
+  await pool.query("delete from menu_items where business_id = $1", [business.id]);
+  for (const item of items) {
+    await pool.query("insert into menu_items (business_id, name, price, category) values ($1,$2,$3,$4)", [
+      business.id,
+      item.name,
+      item.price,
+      item.category,
+    ]);
+  }
+  res.json({ replaced: items.length });
+});
+
 // Recupera una conversación existente por sessionId (para restaurar el chat al recargar la página).
 app.get("/api/chat/:slug/history", async (req, res) => {
   const { sessionId } = req.query;
