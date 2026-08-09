@@ -15,13 +15,15 @@ const { Pool } = pkg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "5mb" })); // el límite por defecto es muy chico para subir un logo
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || "").trim();
 const GOOGLE_CLIENT_SECRET = (process.env.GOOGLE_CLIENT_SECRET || "").trim();
 const FACEBOOK_APP_ID = (process.env.FACEBOOK_APP_ID || "").trim();
 const FACEBOOK_APP_SECRET = (process.env.FACEBOOK_APP_SECRET || "").trim();
+const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || "").trim();
+const MP_PLAN_ID = (process.env.MP_PLAN_ID || "").trim();
 const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
 
 // Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
@@ -210,9 +212,10 @@ function deriveOrderStatus(parsedOrder) {
 // Endpoint público: lo consulta el frontend genérico al cargar, para saber
 // el nombre, el saludo y el catálogo del negocio. Nunca expone system_prompt_extra ni datos bancarios.
 app.get("/api/business/:slug", async (req, res) => {
-  const { rows: businessRows } = await pool.query("select id, slug, name, greeting from businesses where slug = $1", [
-    req.params.slug,
-  ]);
+  const { rows: businessRows } = await pool.query(
+    "select id, slug, name, greeting, logo_data from businesses where slug = $1",
+    [req.params.slug]
+  );
   const business = businessRows[0];
   if (!business) return res.status(404).json({ error: "Negocio no encontrado" });
 
@@ -220,7 +223,7 @@ app.get("/api/business/:slug", async (req, res) => {
     "select name, price, category from menu_items where business_id = $1 and active = true order by category, name",
     [business.id]
   );
-  res.json({ slug: business.slug, name: business.name, greeting: business.greeting, menuItems });
+  res.json({ slug: business.slug, name: business.name, greeting: business.greeting, logoData: business.logo_data, menuItems });
 });
 
 // Autoregistro: crea un negocio nuevo sin intervención manual. Protegido con un código de
@@ -300,6 +303,8 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     webpay_api_key: business.webpay_api_key,
     whatsapp_phone_number_id: business.whatsapp_phone_number_id,
     whatsapp_access_token: business.whatsapp_access_token,
+    subscription_status: business.subscription_status,
+    logo_data: business.logo_data,
     google_sheets_enabled: business.google_sheets_enabled,
     google_spreadsheet_url: business.google_spreadsheet_url,
     google_email: business.google_email,
@@ -308,6 +313,16 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     pause_schedule: business.pause_schedule,
     menuItems,
   });
+});
+
+// Ruta dedicada solo para el logo, separada de settings general para no arriesgar
+// pisar el resto de la configuración cuando se sube una imagen nueva.
+app.put("/api/business/:slug/logo", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+  const { logo_data } = req.body;
+  await pool.query("update businesses set logo_data=$1 where id=$2", [logo_data || null, business.id]);
+  res.json({ saved: true });
 });
 
 app.put("/api/business/:slug/settings", async (req, res) => {
@@ -929,6 +944,69 @@ app.post("/api/business/:slug/whatsapp/connect", async (req, res) => {
   } catch (e) {
     console.error("Error conectando WhatsApp:", e);
     res.status(500).json({ error: "Error interno" });
+  }
+});
+
+// Crea el checkout de suscripción para un negocio: lo liga al plan compartido de $5.000/mes.
+app.post("/api/business/:slug/subscription/create", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: "Falta el correo del negocio" });
+
+  try {
+    const mpRes = await fetch("https://api.mercadopago.com/preapproval", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preapproval_plan_id: MP_PLAN_ID,
+        reason: "Suscripción PONT Ventas",
+        external_reference: business.slug,
+        payer_email: email,
+        back_url: `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${business.slug}`,
+        status: "pending",
+      }),
+    });
+    const data = await mpRes.json();
+    if (!mpRes.ok || !data.init_point) {
+      console.error("Error creando suscripción en Mercado Pago:", data);
+      return res.status(502).json({ error: "No se pudo crear la suscripción" });
+    }
+
+    await pool.query(
+      "update businesses set mp_preapproval_id=$1, subscription_email=$2, subscription_status='pending' where id=$3",
+      [data.id, email, business.id]
+    );
+    res.json({ checkoutUrl: data.init_point });
+  } catch (e) {
+    console.error("Error creando suscripción:", e);
+    res.status(500).json({ error: "Error interno" });
+  }
+});
+
+// Mercado Pago avisa aquí cuando una suscripción se activa, se pausa o se cancela.
+app.post("/api/mercadopago/webhook", async (req, res) => {
+  res.sendStatus(200); // confirmar recepción rápido
+
+  try {
+    const preapprovalId = req.query["data.id"] || (req.body.data && req.body.data.id);
+    const type = req.query.type || req.body.type;
+    if (type !== "subscription_preapproval" && type !== "preapproval") return;
+    if (!preapprovalId) return;
+
+    const mpRes = await fetch(`https://api.mercadopago.com/preapproval/${preapprovalId}`, {
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+    });
+    const preapproval = await mpRes.json();
+    if (!mpRes.ok || !preapproval.external_reference) return;
+
+    await pool.query("update businesses set subscription_status=$1 where slug=$2", [
+      preapproval.status, // 'authorized' | 'paused' | 'cancelled'
+      preapproval.external_reference,
+    ]);
+  } catch (e) {
+    console.error("Error procesando webhook de Mercado Pago:", e);
   }
 });
 
