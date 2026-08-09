@@ -960,11 +960,16 @@ app.post("/api/business/:slug/subscription/create", async (req, res) => {
       method: "POST",
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        preapproval_plan_id: MP_PLAN_ID,
-        reason: "Suscripción PONT Ventas",
+        reason: "Suscripción TeVende",
         external_reference: business.slug,
         payer_email: email,
         back_url: `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${business.slug}`,
+        auto_recurring: {
+          frequency: 1,
+          frequency_type: "months",
+          transaction_amount: 5000,
+          currency_id: "CLP",
+        },
         status: "pending",
       }),
     });
