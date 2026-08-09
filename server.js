@@ -24,6 +24,7 @@ const FACEBOOK_APP_ID = (process.env.FACEBOOK_APP_ID || "").trim();
 const FACEBOOK_APP_SECRET = (process.env.FACEBOOK_APP_SECRET || "").trim();
 const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || "").trim();
 const MP_PLAN_ID = (process.env.MP_PLAN_ID || "").trim();
+const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || "").trim();
 const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
 
 // Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
@@ -448,7 +449,23 @@ app.get("/api/chat/:slug/history", async (req, res) => {
 
 // Procesa un mensaje entrante y devuelve la respuesta — la usan tanto el chat web
 // como WhatsApp, así la lógica de negocio vive en un solo lugar.
+// El agente se desactiva 5 días después del último pago registrado. Si nunca se registró un
+// pago (negocios de antes de este cambio), no se bloquea — evita romper negocios ya activos.
+const DIAS_GRACIA_SIN_PAGO = 5;
+function isAgentInactive(business) {
+  if (!business.last_payment_date) return false;
+  const diasSinPago = (Date.now() - new Date(business.last_payment_date).getTime()) / (1000 * 60 * 60 * 24);
+  return diasSinPago > DIAS_GRACIA_SIN_PAGO;
+}
+
 async function processMessage(business, sessionId, message) {
+  if (isAgentInactive(business)) {
+    return {
+      replyText: "Este servicio está temporalmente pausado. Contáctanos directamente para más información.",
+      order: null,
+    };
+  }
+
   const { rows: menuItems } = await pool.query(
     "select name, price from menu_items where business_id = $1 and active = true order by category, name",
     [business.id]
@@ -1007,13 +1024,48 @@ app.post("/api/mercadopago/webhook", async (req, res) => {
     const preapproval = await mpRes.json();
     if (!mpRes.ok || !preapproval.external_reference) return;
 
-    await pool.query("update businesses set subscription_status=$1 where slug=$2", [
-      preapproval.status, // 'authorized' | 'paused' | 'cancelled'
-      preapproval.external_reference,
-    ]);
+    if (preapproval.status === "authorized") {
+      await pool.query("update businesses set subscription_status=$1, last_payment_date=now() where slug=$2", [
+        preapproval.status,
+        preapproval.external_reference,
+      ]);
+    } else {
+      await pool.query("update businesses set subscription_status=$1 where slug=$2", [
+        preapproval.status, // 'authorized' | 'paused' | 'cancelled'
+        preapproval.external_reference,
+      ]);
+    }
   } catch (e) {
     console.error("Error procesando webhook de Mercado Pago:", e);
   }
+});
+
+function checkAdminAuth(req, res) {
+  if (!ADMIN_PASSWORD || req.headers["x-admin-key"] !== ADMIN_PASSWORD) {
+    res.status(401).json({ error: "Clave de administrador incorrecta" });
+    return false;
+  }
+  return true;
+}
+
+// Lista todos los negocios con sus links listos, para el panel de administrador (solo tú).
+app.get("/api/admin/businesses", async (req, res) => {
+  if (!checkAdminAuth(req, res)) return;
+  const { rows } = await pool.query(
+    "select slug, name, subscription_status, last_payment_date, created_at from businesses order by created_at desc"
+  );
+  res.json({ businesses: rows });
+});
+
+// Cambia a mano la fecha de último pago de un negocio (por ejemplo, si te pagó por transferencia).
+app.put("/api/admin/businesses/:slug/last-payment", async (req, res) => {
+  if (!checkAdminAuth(req, res)) return;
+  const { last_payment_date } = req.body;
+  await pool.query("update businesses set last_payment_date=$1 where slug=$2", [
+    last_payment_date || null,
+    req.params.slug,
+  ]);
+  res.json({ saved: true });
 });
 
 const port = process.env.PORT || 3000;
