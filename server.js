@@ -304,6 +304,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     whatsapp_phone_number_id: business.whatsapp_phone_number_id,
     whatsapp_access_token: business.whatsapp_access_token,
     subscription_status: business.subscription_status,
+    mp_checkout_url: business.mp_checkout_url,
     logo_data: business.logo_data,
     google_sheets_enabled: business.google_sheets_enabled,
     google_spreadsheet_url: business.google_spreadsheet_url,
@@ -980,8 +981,8 @@ app.post("/api/business/:slug/subscription/create", async (req, res) => {
     }
 
     await pool.query(
-      "update businesses set mp_preapproval_id=$1, subscription_email=$2, subscription_status='pending' where id=$3",
-      [data.id, email, business.id]
+      "update businesses set mp_preapproval_id=$1, subscription_email=$2, subscription_status='pending', mp_checkout_url=$4 where id=$3",
+      [data.id, email, business.id, data.init_point]
     );
     res.json({ checkoutUrl: data.init_point });
   } catch (e) {
