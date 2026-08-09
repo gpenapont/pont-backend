@@ -305,6 +305,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     whatsapp_phone_number_id: business.whatsapp_phone_number_id,
     whatsapp_access_token: business.whatsapp_access_token,
     subscription_status: business.subscription_status,
+    last_payment_date: business.last_payment_date,
     mp_checkout_url: business.mp_checkout_url,
     logo_data: business.logo_data,
     google_sheets_enabled: business.google_sheets_enabled,
