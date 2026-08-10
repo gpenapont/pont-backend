@@ -42,7 +42,7 @@ async function sendVerificationEmail(email, businessName, token) {
       html: `
         <p>Hola,</p>
         <p>Falta un paso para activar la cuenta de <b>${businessName}</b> en TeVende.</p>
-        <p><a href="${verifyUrl}" style="background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Confirmar mi cuenta</a></p>
+        <p><a href="${verifyUrl}" style="display:inline-block;background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Confirmar mi cuenta</a></p>
         <p>Si el botón no funciona, copia y pega este link en tu navegador:<br/>${verifyUrl}</p>
       `,
     }),
