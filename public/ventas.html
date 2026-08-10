@@ -235,6 +235,25 @@
   <!-- CATÁLOGO -->
   <div class="tab-panel" id="panelCatalogo">
     <div class="card">
+      <h2>Entrega</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Activa las formas de entrega que ofreces. El agente solo le va a ofrecer al cliente las que actives acá.</p>
+
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
+        <input type="checkbox" id="pickupEnabled" style="width:auto;" /> Retiro en tienda
+      </label>
+      <label>Dirección de retiro</label>
+      <input id="pickupAddress" placeholder="Ej: Av. Providencia 1234, local 5, Providencia" />
+
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy); margin-top:14px;">
+        <input type="checkbox" id="deliveryEnabled" style="width:auto;" /> Despacho a domicilio
+      </label>
+      <label>Reglas de despacho a domicilio</label>
+      <textarea id="deliveryRules" rows="4" placeholder="Ej: Despacho $2.500 dentro de Providencia y Ñuñoa, pedido mínimo $10.000. Fuera de esas comunas se cotiza aparte."></textarea>
+
+      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+    </div>
+
+    <div class="card">
       <h2>Catálogo</h2>
 
       <details style="margin-bottom:16px; border:1.5px solid var(--gray); border-radius:8px; padding:12px;">
@@ -660,6 +679,10 @@
       }
       document.getElementById("botPaused").checked = !!data.bot_paused;
       document.getElementById("pauseScheduleEnabled").checked = !!data.pause_schedule_enabled;
+      document.getElementById("pickupEnabled").checked = data.pickup_enabled !== false;
+      document.getElementById("pickupAddress").value = data.pickup_address || "";
+      document.getElementById("deliveryEnabled").checked = data.delivery_enabled !== false;
+      document.getElementById("deliveryRules").value = data.delivery_rules || "";
       pauseSchedule = data.pause_schedule || {};
       renderSchedule();
       currentItems = data.menuItems || [];
@@ -690,6 +713,10 @@
         bot_paused: document.getElementById("botPaused").checked,
         pause_schedule_enabled: document.getElementById("pauseScheduleEnabled").checked,
         pause_schedule: pauseSchedule,
+        pickup_enabled: document.getElementById("pickupEnabled").checked,
+        pickup_address: document.getElementById("pickupAddress").value,
+        delivery_enabled: document.getElementById("deliveryEnabled").checked,
+        delivery_rules: document.getElementById("deliveryRules").value,
       }),
     });
     const msg = document.getElementById("savedMsg");

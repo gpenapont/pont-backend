@@ -176,6 +176,27 @@ function formatBankDetails(b) {
   ].join("\n");
 }
 
+// Arma las instrucciones de entrega según lo que el negocio activó en Catálogo.
+// Por defecto (columnas null, negocios de antes de este cambio) se tratan como
+// activadas ambas, para no cambiar el comportamiento de negocios ya en marcha.
+function buildDeliverySection(b) {
+  const pickup = b.pickup_enabled !== false;
+  const delivery = b.delivery_enabled !== false;
+  const pickupAddress = b.pickup_address || null;
+  const deliveryRules = b.delivery_rules || null;
+
+  if (pickup && delivery) {
+    return `Antes de cerrar el pedido, pregunta si es despacho a domicilio o retiro en tienda.${pickupAddress ? ` El retiro en tienda es en: ${pickupAddress}.` : ""}${deliveryRules ? ` Reglas de despacho a domicilio del negocio: ${deliveryRules}.` : ""} Si no sabes el nombre del cliente (revisa la información conocida más arriba), pregúntaselo en ese mismo mensaje, junto con la pregunta de entrega — por ejemplo: "¿Me confirmas tu nombre, y si prefieres despacho a domicilio o retiro en tienda?". No lo dejes para después ni lo omitas. Si es despacho y no tienes una dirección registrada, pide también dirección y comuna.`;
+  }
+  if (pickup && !delivery) {
+    return `Este negocio solo ofrece retiro en tienda, no hace despacho a domicilio — no ofrezcas despacho como opción.${pickupAddress ? ` El retiro es en: ${pickupAddress}, coméntaselo al cliente cuando corresponda.` : ""} Si no sabes el nombre del cliente, pregúntaselo en algún momento natural antes de cerrar el pedido. Antes de cerrar el pedido, confirma con el cliente que retirará en tienda.`;
+  }
+  if (!pickup && delivery) {
+    return `Este negocio solo hace despacho a domicilio, no ofrece retiro en tienda — no ofrezcas retiro como opción.${deliveryRules ? ` Reglas de despacho a domicilio del negocio: ${deliveryRules}.` : ""} Antes de cerrar el pedido, pide la dirección y comuna de despacho (si no la tienes ya registrada, revisa la información conocida más arriba) y el nombre del cliente si no lo sabes.`;
+  }
+  return `Este negocio no tiene un método de entrega configurado — no preguntes por tipo de entrega, solo confirma el pedido y el nombre del cliente si no lo sabes.`;
+}
+
 function buildSystemPrompt(business, menuItems, customer) {
   const menuText = menuItems.map((i) => `- ${i.name}: $${i.price.toLocaleString("es-CL")}`).join("\n");
   const hasBankDetails = !!business.bank_account_number;
@@ -217,7 +238,7 @@ Tu trabajo:
 - Si el negocio especificó algún costo de despacho en sus instrucciones propias (más arriba), y el cliente elige despacho a domicilio, agrégalo como un ítem más en la lista de productos (por ejemplo "Despacho a domicilio" con su precio), para que quede visible en el desglose y no escondido dentro del total. Si el negocio dice que el despacho se cotiza aparte sin dar un monto fijo, no inventes un número — dilo así de claro.
 - Responder en español neutro, amable pero sin modismos chilenos informales (nada de "bacán", "al tiro", "cachai", "po") y sin sonar tampoco excesivamente formal o robótico. Mantén las respuestas razonablemente breves, salvo que las instrucciones del negocio (más arriba) pidan un estilo más extenso, como explicaciones o recomendaciones detalladas. Sin markdown ni asteriscos.
 - Si el cliente indica que no quiere agregar nada más (por ejemplo "nada más", "eso es todo", "solo eso", "no gracias"), no vuelvas a preguntar si quiere algo más. Avanza directo al siguiente paso: si falta el tipo de entrega, pregúntalo; si ya lo tienes, resume el pedido completo y pide confirmación.
-- Antes de cerrar el pedido, pregunta si es despacho a domicilio o retiro en tienda. Si no sabes el nombre del cliente (revisa la información conocida más arriba), pregúntaselo en ese mismo mensaje, junto con la pregunta de entrega — por ejemplo: "¿Me confirmas tu nombre, y si prefieres despacho a domicilio o retiro en tienda?". No lo dejes para después ni lo omitas. Si es despacho y no tienes una dirección registrada, pide también dirección y comuna.
+- ${buildDeliverySection(business)}
 - Después resume lo que llevan, el nombre del cliente si lo sabes, el tipo de entrega con su dirección si aplica, y pregunta si está todo correcto.
 - Marcar el pedido como confirmado solo cuando el cliente lo confirme explícitamente.
 ${paymentSection}
@@ -395,6 +416,10 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     bot_paused: business.bot_paused,
     pause_schedule_enabled: business.pause_schedule_enabled,
     pause_schedule: business.pause_schedule,
+    pickup_enabled: business.pickup_enabled !== false,
+    pickup_address: business.pickup_address,
+    delivery_enabled: business.delivery_enabled !== false,
+    delivery_rules: business.delivery_rules,
     menuItems,
   });
 });
@@ -418,16 +443,19 @@ app.put("/api/business/:slug/settings", async (req, res) => {
     webpay_enabled, webpay_commerce_code, webpay_api_key,
     whatsapp_phone_number_id, whatsapp_access_token,
     bot_paused, pause_schedule_enabled, pause_schedule,
+    pickup_enabled, pickup_address, delivery_enabled, delivery_rules,
   } = req.body;
   await pool.query(
     `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
      bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10,
-     whatsapp_phone_number_id=$11, whatsapp_access_token=$12, bot_paused=$13, pause_schedule_enabled=$14, pause_schedule=$15
-     where id=$16`,
+     whatsapp_phone_number_id=$11, whatsapp_access_token=$12, bot_paused=$13, pause_schedule_enabled=$14, pause_schedule=$15,
+     pickup_enabled=$16, pickup_address=$17, delivery_enabled=$18, delivery_rules=$19
+     where id=$20`,
     [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
      !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null,
      whatsapp_phone_number_id || null, whatsapp_access_token || null,
-     !!bot_paused, !!pause_schedule_enabled, JSON.stringify(pause_schedule || {}), business.id]
+     !!bot_paused, !!pause_schedule_enabled, JSON.stringify(pause_schedule || {}),
+     !!pickup_enabled, pickup_address || null, !!delivery_enabled, delivery_rules || null, business.id]
   );
   res.json({ saved: true });
 });
