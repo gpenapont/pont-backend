@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TeVende</title>
+<style>
+  img#loginLogo:not([src]), img#loginLogo[src=""], img#headerLogo:not([src]), img#headerLogo[src=""] { display: none; }
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Nunito+Sans:wght@400;600;700&display=swap');
+  :root {
+    --navy: #102738; --coral: #E64F3F; --mint: #C1E1D6; --gray: #E3E4E3; --white: #FFFFFF; --muted: #5C6B76;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Nunito Sans', -apple-system, sans-serif;
+    max-width: 720px; margin: 0 auto; padding: 0 16px 60px; color: var(--navy); background: var(--gray);
+  }
+  h1 { font-family: 'Poppins', sans-serif; font-size: 20px; font-weight: 700; margin: 0; }
+  h2 { font-family: 'Poppins', sans-serif; font-size: 14px; font-weight: 600; margin: 0 0 10px; color: var(--navy); }
+  .card { background: var(--white); border-radius: 12px; padding: 18px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(16,39,56,0.06); }
+  label { display: block; font-size: 12.5px; font-weight: 700; color: var(--muted); margin: 10px 0 4px; }
+  label:first-child { margin-top: 0; }
+  input, textarea, select {
+    width: 100%; font-family: 'Nunito Sans', sans-serif; font-size: 14px; color: var(--navy);
+    border: 1.5px solid var(--gray); border-radius: 8px; padding: 9px 11px;
+  }
+  textarea { resize: vertical; min-height: 90px; }
+  button {
+    background: var(--coral); color: #fff; border: none; border-radius: 999px;
+    padding: 9px 18px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: 'Nunito Sans', sans-serif;
+  }
+  button.secondary { background: var(--gray); color: var(--navy); }
+  button.small { padding: 5px 12px; font-size: 12px; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .save-row { margin-top: 14px; display: flex; align-items: center; gap: 10px; }
+  .saved-msg { font-size: 12.5px; color: #1E7B34; opacity: 0; transition: opacity .3s; }
+  .saved-msg.show { opacity: 1; }
+
+  .item-row { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--gray); }
+  .item-row:last-child { border-bottom: none; }
+  .item-row input { font-size: 13.5px; padding: 6px 9px; }
+  .item-row .name { flex: 2; }
+  .item-row .price { flex: 1; width: 90px; }
+  .item-row .category { flex: 1; }
+  .item-row .active-toggle { flex-shrink: 0; }
+  .item-row .del { flex-shrink: 0; background: var(--gray); color: var(--muted); }
+
+  .order-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .order-items { font-size: 13.5px; margin: 4px 0; }
+  .order-total { font-family: 'Poppins', sans-serif; font-weight: 700; }
+  .order-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  #login { max-width: 320px; margin: 0 auto; padding-top: 90px; text-align: center; }
+  #login .tagline { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 22px; margin-bottom: 26px; }
+  #login input { margin: 10px 0; border-radius: 10px; padding: 12px 14px; }
+  #login button { width: 100%; padding: 12px; border-radius: 10px; font-size: 14px; }
+
+  header { display: flex; justify-content: space-between; align-items: center; padding: 28px 0 18px; }
+  .biz-sub { font-size: 12.5px; color: var(--muted); }
+  .tabs { display: flex; gap: 6px; margin-bottom: 18px; }
+  .tab-btn {
+    background: var(--white); color: var(--muted); border-radius: 999px; padding: 8px 16px; font-size: 13px;
+    cursor: pointer; border: 1.5px solid var(--gray);
+  }
+  .tab-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <img id="loginLogo" style="height:40px; margin-bottom:26px;" alt="Pont" />
+  <input id="password" type="password" placeholder="Clave del negocio" onkeydown="if(event.key==='Enter') tryLogin()" />
+  <button onclick="tryLogin()">Entrar</button>
+  <div id="loginError" style="color:#E64F3F; font-size:13px; margin-top:8px;"></div>
+</div>
+
+<div id="app" style="display:none;">
+  <header>
+    <div>
+      <img id="headerLogo" style="height:22px; margin-bottom:6px;" alt="Pont" />
+      <div class="biz-sub" id="bizTitle">Cargando…</div>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab-btn active" id="tabBtnPedidos" onclick="showTab('pedidos')">Pedidos</div>
+    <div class="tab-btn" id="tabBtnConfig" onclick="showTab('config')">Configuración</div>
+    <div class="tab-btn" id="tabBtnCatalogo" onclick="showTab('catalogo')">Catálogo</div>
+    <div class="tab-btn" id="tabBtnSuscripcion" onclick="showTab('suscripcion')">Tu suscripción</div>
+  </div>
+
+  <!-- PEDIDOS -->
+  <div class="tab-panel active" id="panelPedidos">
+    <div class="card">
+      <h2>Exportar pedidos a Google Sheets</h2>
+      <div id="googleNotConnected">
+        <p style="font-size:12.5px; color:var(--muted); margin:0 0 12px;">
+          Conecta tu cuenta de Google y te creamos automáticamente una planilla propia con tus pedidos, actualizada en vivo.
+        </p>
+        <button onclick="connectGoogle()">Conectar con Google</button>
+      </div>
+      <div id="googleConnected" style="display:none;">
+        <p style="font-size:12.5px; color:var(--muted); margin:0 0 6px;">Conectado como <b id="googleEmail"></b></p>
+        <a id="googleSheetLink" href="#" target="_blank" style="font-size:12.5px; color:var(--coral); font-weight:700;">Abrir mi planilla</a>
+        <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy); margin-top:14px;">
+          <input type="checkbox" id="googleSheetsEnabled" style="width:auto;" onchange="toggleGoogleSheets(this.checked)" /> Sincronizar pedidos automáticamente
+        </label>
+        <button class="small" style="margin-top:14px; background:#5C6B76;" onclick="disconnectGoogle()">Desconectar</button>
+      </div>
+    </div>
+
+    <div id="ordersList"></div>
+  </div>
+
+  <!-- CONFIGURACIÓN -->
+  <div class="tab-panel" id="panelConfig">
+    <div class="card">
+      <h2>Tu agente</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Comparte este link o el código QR para que tus clientes lleguen directo al chat.</p>
+      <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+        <div>
+          <img id="agentQr" style="width:130px; height:130px; border-radius:8px; border:1.5px solid var(--gray); display:block;" alt="Código QR del agente" />
+          <button class="small" style="margin-top:8px; width:130px;" onclick="downloadQr()">Descargar QR</button>
+        </div>
+        <div style="flex:1; min-width:200px;">
+          <input id="agentLink" readonly style="margin-bottom:8px;" />
+          <button class="small" onclick="copyAgentLink()">Copiar link</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Tu logo</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Reemplaza el logo por el tuyo en tu panel y en el chat de tus clientes.</p>
+      <img id="logoPreview" style="display:none; max-height:60px; margin-bottom:10px; border-radius:6px;" />
+      <input type="file" id="logoFile" accept="image/*" onchange="uploadLogo(this)" />
+    </div>
+
+    <div class="card">
+      <h2>Saludo inicial</h2>
+      <label>Lo primero que ve el cliente al abrir el chat</label>
+      <input id="greeting" />
+      <div class="save-row">
+        <button onclick="saveSettings()">Guardar</button>
+        <span class="saved-msg" id="savedMsg">Guardado ✓</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Cómo debe comportarse tu asistente</h2>
+      <label>Instrucciones, tono y reglas propias del negocio</label>
+      <p style="font-size:12px; color:var(--muted); margin:0 0 8px; font-style:italic;">
+        💡 Tip: pídele a ChatGPT (u otro asistente de IA) que te redacte el contexto de tu negocio para un agente de ventas, y pega el resultado aquí.
+      </p>
+      <textarea id="systemPromptExtra" rows="8"></textarea>
+      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Modo pausa (para atender tú mismo por WhatsApp)</h2>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
+        <input type="checkbox" id="botPaused" style="width:auto;" /> Pausar el bot ahora mismo (yo voy a contestar a mano)
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy); margin-top:14px;">
+        <input type="checkbox" id="pauseScheduleEnabled" style="width:auto;" /> Activar horario semanal de pausa
+      </label>
+      <div id="scheduleRows" style="margin-top:10px;"></div>
+      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+    </div>
+
+    <div class="card">
+      <h2>WhatsApp</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 12px; line-height:1.5;">
+        Conecta el WhatsApp que ya usas para tu negocio — inicias sesión con tu propio Facebook y quedan conectados el número y los permisos automáticamente.
+      </p>
+      <button id="waConnectBtn" onclick="launchWhatsAppSignup()" style="background:#1877F2;">Conectar mi WhatsApp con Facebook</button>
+      <div id="waConnectedMsg" style="display:none; margin-top:10px; font-size:12.5px; color:#1E7B34; font-weight:700;">✓ WhatsApp conectado</div>
+
+      <details style="margin-top:16px;">
+        <summary style="font-size:12px; color:var(--muted); cursor:pointer;">O ingresa los datos manualmente</summary>
+        <label>Número de teléfono (Phone Number ID de Meta)</label>
+        <input id="whatsappPhoneId" placeholder="Se completa al conectar el número en Meta" />
+        <label>Token de acceso</label>
+        <input id="whatsappAccessToken" placeholder="Token de acceso de la app de Meta" />
+        <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Cobro con Webpay</h2>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
+        <input type="checkbox" id="webpayEnabled" style="width:auto;" /> Activar cobro automático con tarjeta (Webpay)
+      </label>
+      <label>Código de comercio</label>
+      <input id="webpayCommerceCode" placeholder="Se completa cuando tengas la aprobación de Transbank" />
+      <label>API Key de comercio</label>
+      <input id="webpayApiKey" placeholder="Se completa cuando tengas la aprobación de Transbank" />
+      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Datos bancarios para cobrar a tus clientes</h2>
+      <label>Banco</label>
+      <select id="bankName">
+        <option value="">Selecciona un banco</option>
+        <option>Banco de Chile</option>
+        <option>Banco Internacional</option>
+        <option>Scotiabank</option>
+        <option>Banco BCI</option>
+        <option>Banco BICE</option>
+        <option>HSBC Bank Chile</option>
+        <option>Banco Santander</option>
+        <option>Banco Itaú</option>
+        <option>Banco Falabella</option>
+        <option>Banco Ripley</option>
+        <option>Banco Consorcio</option>
+        <option>Banco BTG Pactual</option>
+        <option>Tanner Banco Digital</option>
+        <option>Tenpo</option>
+        <option>BancoEstado</option>
+        <option>J.P. Morgan</option>
+        <option>China Construction Bank</option>
+        <option>Bank of China</option>
+      </select>
+      <label>Tipo de cuenta</label><input id="bankAccountType" />
+      <label>N° de cuenta</label><input id="bankAccountNumber" />
+      <label>RUT</label><input id="bankRut" />
+      <label>Correo para comprobantes</label><input id="bankEmail" />
+      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+    </div>
+  </div>
+
+  <!-- CATÁLOGO -->
+  <div class="tab-panel" id="panelCatalogo">
+    <div class="card">
+      <h2>Catálogo</h2>
+
+      <details style="margin-bottom:16px; border:1.5px solid var(--gray); border-radius:8px; padding:12px;">
+        <summary style="font-size:13px; font-weight:700; color:var(--navy); cursor:pointer;">Cargar todo el catálogo de una vez (reemplaza lo que ya tienes)</summary>
+        <p style="font-size:12.5px; color:var(--muted); margin:10px 0;">
+          Copia tus productos desde Excel o Google Sheets (tres columnas: Nombre, Precio, Categoría) y pégalos abajo tal cual — funciona igual si están separados por comas. Un producto por línea. <b>Esto borra el catálogo actual y lo reemplaza completo</b>, así que revisa que esté todo antes de confirmar.
+        </p>
+        <textarea id="bulkCatalog" rows="6" placeholder="Alfajor de mazapán, 4200, Alfajores&#10;Caja de regalo grande, 15000, Regalos"></textarea>
+        <div class="save-row"><button onclick="replaceCatalog()">Reemplazar catálogo completo</button></div>
+      </details>
+
+      <div id="itemsList"></div>
+      <div class="item-row" style="margin-top:10px;">
+        <input class="name" id="newName" placeholder="Nombre del producto" />
+        <input class="price" id="newPrice" type="number" placeholder="Precio" />
+        <input class="category" id="newCategory" placeholder="Categoría" />
+        <button class="small" onclick="addItem()">Agregar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SUSCRIPCIÓN -->
+  <div class="tab-panel" id="panelSuscripcion">
+    <div class="card" id="subscriptionCard" style="border:1.5px solid var(--coral);">
+      <h2>Tu suscripción TeVende</h2>
+      <div id="subInactive">
+        <p style="font-size:13px; color:var(--muted); margin:0 0 12px;">$5.000 al mes, se cobra automático por Mercado Pago. Sin esto, tu agente deja de estar activo.</p>
+        <label>Correo para la suscripción</label>
+        <input id="subEmail" placeholder="tu@correo.cl" />
+        <div class="save-row"><button onclick="startSubscription()">Suscribirme ($5.000/mes)</button></div>
+      </div>
+      <div id="subPending" style="display:none;">
+        <p style="font-size:13px; color:#8A6D00; margin:0 0 12px;">Iniciaste la suscripción pero falta completar el pago. <a href="#" id="subContinueLink" style="color:var(--coral); font-weight:700;">Continuar pago</a></p>
+        <label>¿No funciona? Reintenta con tu correo</label>
+        <input id="subEmailRetry" placeholder="tu@correo.cl" />
+        <div class="save-row"><button onclick="startSubscription('subEmailRetry')">Generar link nuevo</button></div>
+      </div>
+      <div id="subActive" style="display:none;">
+        <p style="font-size:13px; color:#1E7B34; font-weight:700; margin:0 0 10px;">✓ Suscripción activa</p>
+        <p style="font-size:12.5px; color:var(--muted); margin:0;">Último pago: <b id="subLastPayment">—</b></p>
+        <p style="font-size:12.5px; color:var(--muted); margin:2px 0 0;">Próximo pago estimado: <b id="subNextPayment">—</b></p>
+      </div>
+      <div id="subOther" style="display:none;">
+        <p style="font-size:13px; color:var(--coral); font-weight:700; margin:0;" id="subOtherMsg"></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+
+  // Cambia esto por cada negocio.
+  // Para sitios nuevos: el negocio se identifica por la URL (?negocio=slug). Si no viene,
+  // usa este valor fijo como respaldo (para que los sitios ya desplegados sigan funcionando).
+  const BACKEND_URL = "https://pont-backend-production.up.railway.app";
+  const BUSINESS_SLUG = new URLSearchParams(window.location.search).get("negocio") || "sodastream";
+  const GOOGLE_CLIENT_ID = "40303689859-s37f3b57m4sv6ddbhflii0vsemtui575.apps.googleusercontent.com";
+  const FACEBOOK_APP_ID = "tu-facebook-app-id";
+  const FACEBOOK_CONFIG_ID = "tu-config-id-de-embedded-signup";
+  // Sin logo de PONT por defecto: los <img> quedan vacíos hasta que el negocio suba el suyo propio.
+
+  // Link y QR del agente: no dependen del login, se arman apenas se sabe el slug.
+  const AGENT_LINK = `${window.location.origin}/?negocio=${BUSINESS_SLUG}`;
+  document.getElementById("agentLink").value = AGENT_LINK;
+  document.getElementById("agentQr").src = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(AGENT_LINK)}`;
+
+  function copyAgentLink() {
+    navigator.clipboard.writeText(AGENT_LINK);
+    alert("Link copiado.");
+  }
+
+  async function downloadQr() {
+    try {
+      const res = await fetch(document.getElementById("agentQr").src);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `qr-${BUSINESS_SLUG}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("No se pudo descargar el QR. Prueba con clic derecho → Guardar imagen.");
+    }
+  }
+
+  // Solo mostramos el logo si el negocio ya subió el suyo propio (dato público, no necesita login).
+  fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}`)
+    .then((r) => r.json())
+    .then((biz) => {
+      if (biz.logoData) {
+        document.getElementById("loginLogo").src = biz.logoData;
+        document.getElementById("headerLogo").src = biz.logoData;
+      }
+    })
+    .catch(() => {});
+
+  const STATUS_LABEL = {
+    draft: "Borrador",
+    confirmado: "Confirmado, sin pagar",
+    pago_avisado: "Avisó transferencia",
+    pago_verificado: "Pago verificado",
+    cancelado: "Cancelado",
+    eliminado: "Eliminado",
+  };
+  const STATUS_COLOR = {
+    draft: { bg: "#E3E4E3", fg: "#5C6B76" },
+    confirmado: { bg: "#FFF3D6", fg: "#8A6D00" },
+    pago_avisado: { bg: "#FBE2DE", fg: "#B03A2A" },
+    pago_verificado: { bg: "#DCEFE4", fg: "#1E7B34" },
+    cancelado: { bg: "#E3E4E3", fg: "#8A8A8A" },
+    eliminado: { bg: "#F1DDD2", fg: "#8A4A2A" },
+  };
+
+  function getKey() { return sessionStorage.getItem("pont_ventas_key_" + BUSINESS_SLUG); }
+  function setKey(k) { sessionStorage.setItem("pont_ventas_key_" + BUSINESS_SLUG, k); }
+  function authHeaders() { return { "Content-Type": "application/json", "x-dashboard-key": getKey() || "" }; }
+  const fmt = (n) => "$" + (n || 0).toLocaleString("es-CL");
+
+  let currentItems = [];
+  let pendingLogoData = null;
+
+  function uploadLogo(input) {
+    const file = input.files[0];
+    if (!file) return;
+    if (file.size > 1.5 * 1024 * 1024) {
+      alert("La imagen es muy pesada (máximo ~1.5MB). Intenta con una más liviana.");
+      input.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      pendingLogoData = reader.result;
+      const preview = document.getElementById("logoPreview");
+      preview.src = pendingLogoData;
+      preview.style.display = "block";
+      // Se guarda solo, sin necesitar el botón "Guardar" de otra tarjeta.
+      await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/logo`, {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify({ logo_data: pendingLogoData }),
+      });
+      document.getElementById("loginLogo").src = pendingLogoData;
+      document.getElementById("headerLogo").src = pendingLogoData;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function renderSubscription(status, checkoutUrl, lastPaymentDate) {
+    ["subInactive", "subPending", "subActive", "subOther"].forEach((id) => (document.getElementById(id).style.display = "none"));
+    if (status === "authorized") {
+      document.getElementById("subActive").style.display = "block";
+      if (lastPaymentDate) {
+        const last = new Date(lastPaymentDate);
+        const next = new Date(last);
+        next.setMonth(next.getMonth() + 1);
+        const fmt = (d) => d.toLocaleDateString("es-CL", { day: "numeric", month: "long", year: "numeric" });
+        document.getElementById("subLastPayment").textContent = fmt(last);
+        document.getElementById("subNextPayment").textContent = fmt(next);
+      }
+    } else if (status === "pending") {
+      document.getElementById("subPending").style.display = "block";
+      document.getElementById("subContinueLink").href = checkoutUrl || "#";
+    } else if (status === "paused" || status === "cancelled") {
+      document.getElementById("subOtherMsg").textContent = status === "paused" ? "Tu suscripción está pausada." : "Tu suscripción fue cancelada.";
+      document.getElementById("subOther").style.display = "block";
+    } else {
+      document.getElementById("subInactive").style.display = "block";
+    }
+  }
+
+  async function startSubscription(emailFieldId) {
+    const email = document.getElementById(emailFieldId || "subEmail").value.trim();
+    if (!email) { alert("Ingresa tu correo primero."); return; }
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/subscription/create`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.checkoutUrl) { alert(data.error || "No se pudo iniciar la suscripción."); return; }
+    window.location.href = data.checkoutUrl;
+  }
+  let waPendingCode = null;
+  let waPendingPhoneData = null;
+
+  function loadFacebookSdk() {
+    if (window.FB || document.getElementById("facebook-jssdk")) return;
+    window.fbAsyncInit = function () {
+      FB.init({ appId: FACEBOOK_APP_ID, cookie: true, xfbml: true, version: "v23.0" });
+    };
+    const js = document.createElement("script");
+    js.id = "facebook-jssdk";
+    js.src = "https://connect.facebook.net/es_LA/sdk.js";
+    js.async = true;
+    js.defer = true;
+    document.body.appendChild(js);
+  }
+  loadFacebookSdk();
+
+  // Las dos señales (el código de login y los datos del número) pueden llegar en cualquier
+  // orden — solo intentamos conectar cuando ya tenemos las dos, sin importar cuál llegó primero.
+  function tryFinishWhatsAppConnect() {
+    if (waPendingCode && waPendingPhoneData) {
+      finishWhatsAppConnect(waPendingPhoneData.phone_number_id, waPendingPhoneData.waba_id);
+    }
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.origin !== "https://www.facebook.com") return;
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === "WA_EMBEDDED_SIGNUP" && (data.event === "FINISH" || data.event === "FINISH_ONLY_WABA")) {
+        waPendingPhoneData = data.data;
+        tryFinishWhatsAppConnect();
+      }
+    } catch (e) {}
+  });
+
+  function launchWhatsAppSignup() {
+    if (!window.FB) { alert("Cargando Facebook, intenta de nuevo en unos segundos."); loadFacebookSdk(); return; }
+    waPendingCode = null;
+    waPendingPhoneData = null;
+    FB.login(
+      (response) => {
+        if (response.authResponse && response.authResponse.code) {
+          waPendingCode = response.authResponse.code;
+          tryFinishWhatsAppConnect();
+        } else {
+          console.log("El usuario canceló o no autorizó todo.");
+        }
+      },
+      {
+        config_id: FACEBOOK_CONFIG_ID,
+        response_type: "code",
+        override_default_response_type: true,
+        extras: { feature: "whatsapp_embedded_signup" },
+      }
+    );
+  }
+
+  async function finishWhatsAppConnect(phoneNumberId, wabaId) {
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/whatsapp/connect`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ code: waPendingCode, phoneNumberId, wabaId }),
+    });
+    waPendingCode = null;
+    waPendingPhoneData = null;
+    if (res.ok) {
+      document.getElementById("waConnectedMsg").style.display = "block";
+      loadSettings();
+    } else {
+      alert("No se pudo terminar de conectar WhatsApp. Intenta de nuevo.");
+    }
+  }
+
+  function connectGoogle() {
+    const params = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      redirect_uri: `${BACKEND_URL}/api/google/callback`,
+      response_type: "code",
+      scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email",
+      access_type: "offline",
+      prompt: "consent",
+      state: BUSINESS_SLUG,
+    });
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  }
+
+  async function disconnectGoogle() {
+    if (!confirm("¿Desconectar Google Sheets? Dejará de recibir pedidos nuevos, la planilla que ya tienes no se borra.")) return;
+    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/google/disconnect`, { method: "POST", headers: authHeaders() });
+    loadSettings();
+  }
+
+  async function toggleGoogleSheets(enabled) {
+    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/google/toggle`, {
+      method: "POST", headers: authHeaders(), body: JSON.stringify({ enabled }),
+    });
+  }
+  let pauseSchedule = {};
+  const DAYS = [
+    ["mon", "Lunes"], ["tue", "Martes"], ["wed", "Miércoles"], ["thu", "Jueves"],
+    ["fri", "Viernes"], ["sat", "Sábado"], ["sun", "Domingo"],
+  ];
+
+  function renderSchedule() {
+    const el = document.getElementById("scheduleRows");
+    el.innerHTML = DAYS.map(([key, label]) => {
+      const w = pauseSchedule[key] || {};
+      return `
+        <div class="item-row">
+          <span style="flex:1; font-size:13.5px;">${label}</span>
+          <input type="time" style="flex:1;" value="${w.start || ""}" onchange="updateSchedule('${key}', 'start', this.value)" />
+          <span style="flex:0.3; text-align:center; color:var(--muted);">a</span>
+          <input type="time" style="flex:1;" value="${w.end || ""}" onchange="updateSchedule('${key}', 'end', this.value)" />
+        </div>`;
+    }).join("");
+  }
+
+  function updateSchedule(day, field, value) {
+    if (!pauseSchedule[day]) pauseSchedule[day] = {};
+    pauseSchedule[day][field] = value;
+    if (!pauseSchedule[day].start && !pauseSchedule[day].end) delete pauseSchedule[day];
+  }
+
+  function showTab(tab) {
+    document.getElementById("panelPedidos").classList.toggle("active", tab === "pedidos");
+    document.getElementById("panelConfig").classList.toggle("active", tab === "config");
+    document.getElementById("panelCatalogo").classList.toggle("active", tab === "catalogo");
+    document.getElementById("panelSuscripcion").classList.toggle("active", tab === "suscripcion");
+    document.getElementById("tabBtnPedidos").classList.toggle("active", tab === "pedidos");
+    document.getElementById("tabBtnConfig").classList.toggle("active", tab === "config");
+    document.getElementById("tabBtnCatalogo").classList.toggle("active", tab === "catalogo");
+    document.getElementById("tabBtnSuscripcion").classList.toggle("active", tab === "suscripcion");
+  }
+
+  async function tryLogin() {
+    setKey(document.getElementById("password").value);
+    const ok = await loadAll();
+    if (ok) {
+      document.getElementById("login").style.display = "none";
+      document.getElementById("app").style.display = "block";
+    } else {
+      document.getElementById("loginError").textContent = "Clave incorrecta.";
+    }
+  }
+
+  async function loadAll() {
+    const okSettings = await loadSettings();
+    if (!okSettings) return false;
+    await loadOrders();
+    return true;
+  }
+
+  // ---- Pedidos ----
+  async function loadOrders() {
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/orders`, { headers: authHeaders() });
+    const orders = await res.json();
+    const list = document.getElementById("ordersList");
+    if (!orders.length) {
+      list.innerHTML = '<div class="card" style="color:var(--muted); font-size:14px;">Todavía no hay pedidos.</div>';
+      return;
+    }
+    list.innerHTML = orders.map((o) => {
+      const items = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
+      const delivery = o.delivery_type === "despacho" ? `Despacho: ${o.delivery_address || "-"}` : (o.delivery_type === "retiro" ? "Retiro en tienda" : "");
+      const statusOptions = Object.keys(STATUS_LABEL).map((s) =>
+        `<option value="${s}" ${s === o.status ? "selected" : ""}>${STATUS_LABEL[s]}</option>`
+      ).join("");
+      const c = STATUS_COLOR[o.status] || STATUS_COLOR.draft;
+      return `
+        <div class="card">
+          <div class="order-row">
+            <div>
+              ${o.customer_name ? `<div style="font-weight:700; font-size:13.5px; color:var(--navy);">${o.customer_name}</div>` : ""}
+              <div class="order-items">${items}</div>
+              <div class="order-total">${fmt(o.total)}</div>
+              <div class="order-meta">${delivery}</div>
+              <div class="order-meta">${new Date(o.created_at).toLocaleString("es-CL")}</div>
+            </div>
+            <div style="text-align:right;">
+              <select style="background:${c.bg}; color:${c.fg}; border-color:${c.fg};" onchange="changeStatus('${o.id}', this.value)">${statusOptions}</select><br/>
+              <button class="small" style="margin-top:8px; background:#5C6B76" onclick="deleteOrder('${o.id}')">Eliminar</button>
+            </div>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  async function changeStatus(orderId, status) {
+    await fetch(`${BACKEND_URL}/api/orders/${orderId}/status`, {
+      method: "PATCH", headers: authHeaders(), body: JSON.stringify({ status }),
+    });
+    loadOrders();
+  }
+
+  async function deleteOrder(orderId) {
+    if (!confirm("¿Marcar este pedido como eliminado? Queda registrado con ese estado, y lo puedes revertir cambiando el estado de nuevo.")) return;
+    const res = await fetch(`${BACKEND_URL}/api/orders/${orderId}`, { method: "DELETE", headers: authHeaders() });
+    if (!res.ok) { alert("No se pudo eliminar (código " + res.status + ")."); return; }
+    loadOrders();
+  }
+
+  // ---- Configuración ----
+  async function loadSettings() {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/settings`, { headers: authHeaders() });
+      if (res.status === 401) return false;
+      const data = await res.json();
+      document.getElementById("bizTitle").textContent = data.name || BUSINESS_SLUG;
+      document.getElementById("greeting").value = data.greeting || "";
+      renderSubscription(data.subscription_status, data.mp_checkout_url, data.last_payment_date);
+      if (data.logo_data) {
+        const preview = document.getElementById("logoPreview");
+        preview.src = data.logo_data;
+        preview.style.display = "block";
+      }
+      document.getElementById("systemPromptExtra").value = data.system_prompt_extra || "";
+      document.getElementById("bankName").value = data.bank_name || "";
+      document.getElementById("bankAccountType").value = data.bank_account_type || "";
+      document.getElementById("bankAccountNumber").value = data.bank_account_number || "";
+      document.getElementById("bankRut").value = data.bank_rut || "";
+      document.getElementById("bankEmail").value = data.bank_email || "";
+      document.getElementById("webpayEnabled").checked = !!data.webpay_enabled;
+      document.getElementById("webpayCommerceCode").value = data.webpay_commerce_code || "";
+      document.getElementById("webpayApiKey").value = data.webpay_api_key || "";
+      document.getElementById("whatsappPhoneId").value = data.whatsapp_phone_number_id || "";
+      document.getElementById("whatsappAccessToken").value = data.whatsapp_access_token || "";
+
+      if (data.google_email) {
+        document.getElementById("googleNotConnected").style.display = "none";
+        document.getElementById("googleConnected").style.display = "block";
+        document.getElementById("googleEmail").textContent = data.google_email;
+        document.getElementById("googleSheetLink").href = data.google_spreadsheet_url || "#";
+        document.getElementById("googleSheetsEnabled").checked = !!data.google_sheets_enabled;
+      } else {
+        document.getElementById("googleNotConnected").style.display = "block";
+        document.getElementById("googleConnected").style.display = "none";
+      }
+      document.getElementById("botPaused").checked = !!data.bot_paused;
+      document.getElementById("pauseScheduleEnabled").checked = !!data.pause_schedule_enabled;
+      pauseSchedule = data.pause_schedule || {};
+      renderSchedule();
+      currentItems = data.menuItems || [];
+      renderItems();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function saveSettings() {
+    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/settings`, {
+      method: "PUT",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        greeting: document.getElementById("greeting").value,
+        system_prompt_extra: document.getElementById("systemPromptExtra").value,
+        bank_name: document.getElementById("bankName").value,
+        bank_account_type: document.getElementById("bankAccountType").value,
+        bank_account_number: document.getElementById("bankAccountNumber").value,
+        bank_rut: document.getElementById("bankRut").value,
+        bank_email: document.getElementById("bankEmail").value,
+        webpay_enabled: document.getElementById("webpayEnabled").checked,
+        webpay_commerce_code: document.getElementById("webpayCommerceCode").value,
+        webpay_api_key: document.getElementById("webpayApiKey").value,
+        whatsapp_phone_number_id: document.getElementById("whatsappPhoneId").value,
+        whatsapp_access_token: document.getElementById("whatsappAccessToken").value,
+        bot_paused: document.getElementById("botPaused").checked,
+        pause_schedule_enabled: document.getElementById("pauseScheduleEnabled").checked,
+        pause_schedule: pauseSchedule,
+      }),
+    });
+    const msg = document.getElementById("savedMsg");
+    msg.classList.add("show");
+    setTimeout(() => msg.classList.remove("show"), 1800);
+  }
+
+  function renderItems() {
+    const list = document.getElementById("itemsList");
+    list.innerHTML = currentItems.map((it) => `
+      <div class="item-row">
+        <input class="name" value="${(it.name || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="name" />
+        <input class="price" type="number" value="${it.price}" onchange="updateItem('${it.id}', this)" data-field="price" />
+        <input class="category" value="${(it.category || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="category" />
+        <label class="active-toggle" style="font-size:12px; display:flex; align-items:center; gap:4px;">
+          <input type="checkbox" style="width:auto;" ${it.active ? "checked" : ""} onchange="updateItem('${it.id}', this)" data-field="active" /> activo
+        </label>
+        <button class="small del" onclick="deleteItem('${it.id}')">Eliminar</button>
+      </div>
+    `).join("");
+  }
+
+  async function updateItem(id, changedEl) {
+    const item = currentItems.find((i) => i.id === id);
+    if (!item) return;
+    const field = changedEl.dataset.field;
+    item[field] = field === "active" ? changedEl.checked : (field === "price" ? Number(changedEl.value) : changedEl.value);
+    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${id}`, {
+      method: "PUT", headers: authHeaders(),
+      body: JSON.stringify({ name: item.name, price: item.price, category: item.category, active: item.active }),
+    });
+  }
+
+  async function deleteItem(id) {
+    if (!confirm("¿Eliminar este producto del catálogo?")) return;
+    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${id}`, { method: "DELETE", headers: authHeaders() });
+    currentItems = currentItems.filter((i) => i.id !== id);
+    renderItems();
+  }
+
+  async function replaceCatalog() {
+    const text = document.getElementById("bulkCatalog").value.trim();
+    if (!text) { alert("Pega tu catálogo primero."); return; }
+    if (!confirm("Esto va a borrar tu catálogo actual y reemplazarlo por el que pegaste. ¿Seguro que quieres continuar?")) return;
+
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/bulk`, {
+      method: "PUT",
+      headers: authHeaders(),
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || "No se pudo reemplazar el catálogo.");
+      return;
+    }
+    alert(`Listo, se cargaron ${data.replaced} productos.`);
+    document.getElementById("bulkCatalog").value = "";
+    loadSettings();
+  }
+
+  async function addItem() {
+    const name = document.getElementById("newName").value.trim();
+    const price = Number(document.getElementById("newPrice").value);
+    const category = document.getElementById("newCategory").value.trim();
+    if (!name || !price) { alert("Falta nombre o precio."); return; }
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items`, {
+      method: "POST", headers: authHeaders(), body: JSON.stringify({ name, price, category }),
+    });
+    const item = await res.json();
+    currentItems.push({ ...item, active: true });
+    renderItems();
+    document.getElementById("newName").value = "";
+    document.getElementById("newPrice").value = "";
+    document.getElementById("newCategory").value = "";
+  }
+
+  (async () => {
+    const googleResult = new URLSearchParams(window.location.search).get("google");
+    if (googleResult === "connected") setTimeout(() => alert("¡Google Sheets conectado! Ya se creó tu planilla."), 300);
+    if (googleResult === "error") setTimeout(() => alert("No se pudo conectar con Google. Intenta de nuevo."), 300);
+
+    // Si llegamos desde el panel de administrador, viene la clave de admin en la URL —
+    // la usamos como si fuera la clave del negocio, sin pedir login.
+    const adminKey = new URLSearchParams(window.location.search).get("admin_key");
+    if (adminKey) setKey(adminKey);
+
+    if (getKey()) {
+      const ok = await loadAll();
+      if (ok) {
+        document.getElementById("login").style.display = "none";
+        document.getElementById("app").style.display = "block";
+      }
+    }
+  })();
+</script>
+</body>
+</html>

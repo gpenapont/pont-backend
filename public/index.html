@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Chat</title>
+<style>
+  :root {
+    --wa-green: #008069;
+    --wa-green-dark: #005C4B;
+    --wa-bubble-out: #D9FDD3;
+    --wa-bubble-in: #FFFFFF;
+    --wa-bg: #E5DDD5;
+    --wa-ink: #111B21;
+    --wa-muted: #667781;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    background: #0B141A;
+    display: flex;
+    justify-content: center;
+  }
+  ::selection { background: var(--wa-green); color: #fff; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--wa-green-dark); outline-offset: 2px; }
+
+  #app {
+    width: 100%;
+    max-width: 480px;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background: var(--wa-bg);
+  }
+
+  header {
+    background: var(--wa-green);
+    color: #fff;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .avatar {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: rgba(255,255,255,0.25);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 16px; flex-shrink: 0;
+  }
+  .biz-name { font-weight: 600; font-size: 17px; line-height: 1.2; }
+  .status { font-size: 13.5px; opacity: 0.85; }
+
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background-image: radial-gradient(rgba(0,0,0,0.035) 1px, transparent 1px);
+    background-size: 18px 18px;
+  }
+  #chat::-webkit-scrollbar { width: 6px; }
+  #chat::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 4px; }
+
+  .row { display: flex; margin: 3px 0; }
+  .row.user { justify-content: flex-end; }
+  .row.assistant { justify-content: flex-start; }
+
+  .bubble {
+    max-width: 78%;
+    padding: 7px 9px 6px 9px;
+    border-radius: 8px;
+    font-size: 15.5px;
+    line-height: 1.4;
+    white-space: pre-line;
+    position: relative;
+    box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);
+    animation: pop-in .18s ease;
+  }
+  @keyframes pop-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
+  .bubble.assistant { background: var(--wa-bubble-in); border-top-left-radius: 0; color: var(--wa-ink); }
+  .bubble.user { background: var(--wa-bubble-out); border-top-right-radius: 0; color: var(--wa-ink); }
+
+  .meta {
+    display: flex; justify-content: flex-end; align-items: center; gap: 3px;
+    font-size: 10.5px; color: var(--wa-muted); margin-top: 2px; float: right; clear: both;
+    padding-left: 8px;
+  }
+  .meta .check { color: #53BDEB; }
+
+  .pay-link {
+    display: inline-block; margin-top: 8px; background: var(--wa-green); color: #fff;
+    padding: 9px 18px; border-radius: 20px; text-decoration: none; font-weight: 700; font-size: 13.5px;
+  }
+  .bubble a:not(.pay-link) { color: var(--wa-green-dark); font-weight: 600; }
+
+  .order-card {
+    background: var(--wa-bubble-in);
+    border-radius: 8px;
+    border-top-left-radius: 0;
+    padding: 10px 12px;
+    width: min(300px, 82%);
+    box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);
+  }
+  .order-card .title { font-weight: 700; font-size: 14px; color: var(--wa-green-dark); margin-bottom: 6px; }
+  .order-line { display: flex; justify-content: space-between; font-size: 14.5px; padding: 2px 0; color: var(--wa-ink); }
+  .order-note { font-size: 13px; color: var(--wa-muted); margin-top: 4px; }
+  .order-total {
+    display: flex; justify-content: space-between; font-weight: 700; font-size: 15.5px;
+    margin-top: 6px; padding-top: 6px; border-top: 1px dashed #D8DCD6; color: var(--wa-ink);
+  }
+  #orderPulse.pulse { animation: pop .3s ease; }
+  @keyframes pop { 0% { transform: scale(1); } 45% { transform: scale(1.02); } 100% { transform: scale(1); } }
+
+  .typing-bubble { background: var(--wa-bubble-in); border-radius: 8px; border-top-left-radius: 0; padding: 9px 12px; display: inline-flex; gap: 4px; box-shadow: 0 1px 0.5px rgba(0,0,0,0.13); }
+  .typing-bubble span { width: 6px; height: 6px; border-radius: 50%; background: #A0A9AD; animation: bounce 1.2s infinite; }
+  .typing-bubble span:nth-child(2) { animation-delay: .15s; }
+  .typing-bubble span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%,60%,100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+  #inputBar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+    background: #F0F2F1;
+  }
+  #input {
+    flex: 1;
+    border: none;
+    background: #fff;
+    border-radius: 24px;
+    padding: 11px 16px;
+    font-size: 16.5px;
+    color: var(--wa-ink);
+  }
+  #send {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: var(--wa-green); border: none; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; flex-shrink: 0;
+  }
+  #send:disabled { opacity: .5; cursor: default; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header style="padding-top: max(12px, env(safe-area-inset-top));">
+    <div class="avatar" id="avatar">·</div>
+    <div>
+      <div class="biz-name" id="bizName">Cargando…</div>
+      <div class="status" id="statusText">conectando...</div>
+    </div>
+  </header>
+
+  <div id="chat"></div>
+
+  <div id="inputBar">
+    <input id="input" placeholder="Mensaje" aria-label="Escribe tu mensaje" disabled />
+    <button id="send" aria-label="Enviar mensaje" disabled>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 12L21 4L14 21L11 13L3 12Z" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</div>
+
+<script>
+  // Para sitios nuevos: el negocio se identifica por la URL (?negocio=slug), así un solo
+  // sitio sirve a todos los negocios. Si no viene en la URL, usa este valor fijo como respaldo
+  // (así los sitios ya desplegados por negocio siguen funcionando igual que siempre).
+  const BACKEND_URL = "https://pont-backend-production.up.railway.app";
+  const BUSINESS_SLUG = new URLSearchParams(window.location.search).get("negocio") || "sr-mazapanes";
+
+  function getSessionId() {
+    try {
+      let id = localStorage.getItem("pont_session_id");
+      if (!id) { id = crypto.randomUUID(); localStorage.setItem("pont_session_id", id); }
+      return id;
+    } catch (e) { return "session-" + Math.random().toString(36).slice(2); }
+  }
+  const sessionId = getSessionId();
+  const fmt = (n) => "$" + (n || 0).toLocaleString("es-CL");
+  const timeNow = () => new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" });
+
+  const chatEl = document.getElementById("chat");
+  const inputEl = document.getElementById("input");
+  const sendBtn = document.getElementById("send");
+  let orderCardEl = null;
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function linkify(text) {
+    return escapeHtml(text).replace(/(https?:\/\/[^\s]+)/g, (url) => {
+      if (url.includes("/api/webpay/")) {
+        return `<br/><a class="pay-link" href="${url}" target="_blank" rel="noopener">Pagar ahora →</a>`;
+      }
+      return `<a href="${url}" target="_blank" rel="noopener">${url}</a>`;
+    });
+  }
+
+  function addMsg(role, text, withCheck) {
+    const row = document.createElement("div");
+    row.className = "row " + role;
+    const bubble = document.createElement("div");
+    bubble.className = "bubble " + role;
+    bubble.innerHTML = linkify(text);
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.innerHTML = timeNow() + (withCheck ? ' <span class="check">✓✓</span>' : "");
+    bubble.appendChild(meta);
+    row.appendChild(bubble);
+    chatEl.appendChild(row);
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  function showTyping(show) {
+    let el = document.getElementById("typingRow");
+    if (show && !el) {
+      el = document.createElement("div");
+      el.id = "typingRow";
+      el.className = "row assistant";
+      el.innerHTML = '<div class="typing-bubble"><span></span><span></span><span></span></div>';
+      chatEl.appendChild(el);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    } else if (!show && el) {
+      el.remove();
+    }
+  }
+
+  function renderOrder(order) {
+    if (!order || !order.items || order.items.length === 0) return;
+    if (!order.status || order.status === "draft") return; // todavía se está armando, no mostrar tarjeta
+    if (!orderCardEl) {
+      orderCardEl = document.createElement("div");
+      orderCardEl.className = "row assistant";
+      orderCardEl.innerHTML = '<div class="order-card" id="orderPulse"></div>';
+    }
+    let html = '<div class="title">Tu pedido</div>';
+    order.items.forEach((it) => {
+      html += `<div class="order-line"><span>${it.qty}x ${it.name}</span><span>${fmt(it.price * it.qty)}</span></div>`;
+    });
+    if (order.delivery_type) {
+      html += `<div class="order-note">${order.delivery_type === "despacho" ? "Despacho a: " + (order.delivery_address || "por confirmar") : "Retiro"}</div>`;
+    }
+    html += `<div class="order-total"><span>Total</span><span>${fmt(order.total)}</span></div>`;
+    orderCardEl.querySelector(".order-card").innerHTML = html;
+    chatEl.appendChild(orderCardEl); // mueve la tarjeta al final, siempre después del último mensaje
+    const pulseEl = document.getElementById("orderPulse");
+    pulseEl.classList.remove("pulse");
+    void pulseEl.offsetWidth;
+    pulseEl.classList.add("pulse");
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  async function init() {
+    try {
+      const bizRes = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}`);
+      const biz = await bizRes.json();
+      document.getElementById("bizName").textContent = biz.name || BUSINESS_SLUG;
+      if (biz.logoData) {
+        document.getElementById("avatar").innerHTML = `<img src="${biz.logoData}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`;
+      } else {
+        document.getElementById("avatar").textContent = (biz.name || "?").charAt(0).toUpperCase();
+      }
+      document.getElementById("statusText").textContent = "en línea";
+
+      const histRes = await fetch(`${BACKEND_URL}/api/chat/${BUSINESS_SLUG}/history?sessionId=${sessionId}`);
+      const hist = await histRes.json();
+      if (hist.messages && hist.messages.length) {
+        hist.messages.forEach((m) => addMsg(m.role, m.content, m.role === "user"));
+      } else {
+        addMsg("assistant", biz.greeting || "¡Bienvenido! Cuéntanos qué buscas y te ayudamos a encontrarlo.", false);
+      }
+      if (hist.order) renderOrder(hist.order);
+
+      inputEl.disabled = false;
+      sendBtn.disabled = false;
+      inputEl.focus();
+    } catch (e) {
+      document.getElementById("statusText").textContent = "sin conexión";
+    }
+  }
+
+  async function send() {
+    const text = inputEl.value.trim();
+    if (!text) return;
+    addMsg("user", text, true);
+    inputEl.value = "";
+    sendBtn.disabled = true;
+    showTyping(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/chat/${BUSINESS_SLUG}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, message: text }),
+      });
+      const data = await res.json();
+      showTyping(false);
+      addMsg("assistant", data.reply || "Perdona, ¿puedes repetir eso?", false);
+      if (data.order) renderOrder(data.order);
+    } catch (e) {
+      showTyping(false);
+      addMsg("assistant", "No pude conectarme. Intenta de nuevo.", false);
+    } finally {
+      sendBtn.disabled = false;
+      inputEl.focus();
+    }
+  }
+
+  sendBtn.addEventListener("click", send);
+  inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  init();
+</script>
+</body>
+</html>
