@@ -350,7 +350,8 @@ async function getBusinessWithAuth(req, res) {
     res.status(404).json({ error: "Negocio no encontrado" });
     return null;
   }
-  if (business.dashboard_password && req.headers["x-dashboard-key"] !== business.dashboard_password) {
+  const isAdmin = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
+  if (business.dashboard_password && req.headers["x-dashboard-key"] !== business.dashboard_password && !isAdmin) {
     res.status(401).json({ error: "Clave incorrecta" });
     return null;
   }
