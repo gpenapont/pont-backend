@@ -41,7 +41,7 @@
   <h1>Todos los negocios</h1>
   <table>
     <thead>
-      <tr><th>Negocio</th><th>Links</th><th>Suscripción</th><th>Último pago</th><th>Boleta/Factura</th></tr>
+      <tr><th>Negocio</th><th>Links</th><th>Suscripción</th><th>Último pago</th><th>Boleta/Factura</th><th></th></tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
@@ -95,6 +95,7 @@
               <option value="emitida" ${invoiceStatus === "emitida" ? "selected" : ""}>Boleta/Factura emitida</option>
             </select>
           </td>
+          <td><button class="small-btn" style="background:var(--muted);" onclick="deleteBusiness('${b.slug}')">Eliminar</button></td>
         </tr>`;
     }).join("");
   }
@@ -114,6 +115,21 @@
       body: JSON.stringify({ invoice_status: value }),
     });
     selectEl.className = `invoice-select invoice-${value}`;
+  }
+
+  async function deleteBusiness(slug) {
+    const typed = prompt(`Esto borra el negocio "${slug}" para siempre: su catálogo, pedidos, conversaciones y clientes. No se puede deshacer.\n\nEscribe "${slug}" para confirmar:`);
+    if (typed !== slug) return;
+
+    const res = await fetch(`${BACKEND_URL}/api/admin/businesses/${slug}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      alert("No se pudo eliminar el negocio.");
+      return;
+    }
+    loadAll();
   }
 
   if (getKey()) loadAll();

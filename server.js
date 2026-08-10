@@ -1189,6 +1189,29 @@ app.put("/api/admin/businesses/:slug/invoice-status", async (req, res) => {
   res.json({ saved: true });
 });
 
+// Borra un negocio por completo (y todo lo que le pertenece: catálogo, conversaciones,
+// mensajes, clientes y pedidos). A diferencia de "eliminar pedido" (que solo cambia el
+// status), esto es un borrado real — el negocio deja de existir en la plataforma.
+app.delete("/api/admin/businesses/:slug", async (req, res) => {
+  if (!checkAdminAuth(req, res)) return;
+
+  const { rows: bizRows } = await pool.query("select id from businesses where slug = $1", [req.params.slug]);
+  const business = bizRows[0];
+  if (!business) return res.status(404).json({ error: "Negocio no encontrado" });
+
+  await pool.query(
+    "delete from messages where conversation_id in (select id from conversations where business_id = $1)",
+    [business.id]
+  );
+  await pool.query("delete from orders where business_id = $1", [business.id]);
+  await pool.query("delete from conversations where business_id = $1", [business.id]);
+  await pool.query("delete from customers where business_id = $1", [business.id]);
+  await pool.query("delete from menu_items where business_id = $1", [business.id]);
+  await pool.query("delete from businesses where id = $1", [business.id]);
+
+  res.json({ deleted: true });
+});
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`PONT backend escuchando en :${port}`);
