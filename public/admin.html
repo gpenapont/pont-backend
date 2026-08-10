@@ -118,8 +118,7 @@
   }
 
   async function deleteBusiness(slug) {
-    const typed = prompt(`Esto borra el negocio "${slug}" para siempre: su catálogo, pedidos, conversaciones y clientes. No se puede deshacer.\n\nEscribe "${slug}" para confirmar:`);
-    if (typed !== slug) return;
+    if (!confirm(`¿Eliminar el negocio "${slug}" para siempre? Se borra su catálogo, pedidos, conversaciones y clientes. No se puede deshacer.`)) return;
 
     const res = await fetch(`${BACKEND_URL}/api/admin/businesses/${slug}`, {
       method: "DELETE",
