@@ -239,6 +239,26 @@ function deriveOrderStatus(parsedOrder) {
 
 // Endpoint público: lo consulta el frontend genérico al cargar, para saber
 // el nombre, el saludo y el catálogo del negocio. Nunca expone system_prompt_extra ni datos bancarios.
+// El link del correo de verificación llega aquí. Confirma el correo y manda de vuelta al sitio,
+// que ahí sí muestra los links del negocio ya activado.
+// IMPORTANTE: esta ruta va ANTES de "/api/business/:slug" — si fuera después, Express
+// interpretaría "verify-email" como si fuera un slug y nunca llegaría aquí.
+app.get("/api/business/verify-email", async (req, res) => {
+  const { token } = req.query;
+  const redirectBase = process.env.FRONTEND_APP_URL || "";
+  if (!token) return res.redirect(`${redirectBase}/signup.html?verify=error`);
+
+  const { rows } = await pool.query("select slug from businesses where email_verify_token = $1", [token]);
+  const business = rows[0];
+  if (!business) return res.redirect(`${redirectBase}/signup.html?verify=error`);
+
+  await pool.query(
+    "update businesses set email_verified = true, email_verify_token = null where slug = $1",
+    [business.slug]
+  );
+  res.redirect(`${redirectBase}/signup.html?verify=ok&negocio=${business.slug}`);
+});
+
 app.get("/api/business/:slug", async (req, res) => {
   const { rows: businessRows } = await pool.query(
     "select id, slug, name, greeting, logo_data from businesses where slug = $1",
@@ -319,21 +339,7 @@ app.post("/api/business/signup", async (req, res) => {
 
 // El link del correo de verificación llega aquí. Confirma el correo y manda de vuelta al sitio,
 // que ahí sí muestra los links del negocio ya activado.
-app.get("/api/business/verify-email", async (req, res) => {
-  const { token } = req.query;
-  const redirectBase = process.env.FRONTEND_APP_URL || "";
-  if (!token) return res.redirect(`${redirectBase}/signup.html?verify=error`);
 
-  const { rows } = await pool.query("select slug from businesses where email_verify_token = $1", [token]);
-  const business = rows[0];
-  if (!business) return res.redirect(`${redirectBase}/signup.html?verify=error`);
-
-  await pool.query(
-    "update businesses set email_verified = true, email_verify_token = null where slug = $1",
-    [business.slug]
-  );
-  res.redirect(`${redirectBase}/signup.html?verify=ok&negocio=${business.slug}`);
-});
 
 // Helper compartido: busca el negocio por slug y valida la clave del panel (header x-dashboard-key).
 // Devuelve la fila del negocio si todo bien, o null y ya responde el error si no.
