@@ -9,6 +9,7 @@
 import express from "express";
 import cors from "cors";
 import pkg from "pg";
+import crypto from "crypto";
 import "dotenv/config";
 
 const { Pool } = pkg;
@@ -25,6 +26,32 @@ const FACEBOOK_APP_SECRET = (process.env.FACEBOOK_APP_SECRET || "").trim();
 const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || "").trim();
 const MP_PLAN_ID = (process.env.MP_PLAN_ID || "").trim();
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || "").trim();
+const RECAPTCHA_SECRET_KEY = (process.env.RECAPTCHA_SECRET_KEY || "").trim();
+const RESEND_API_KEY = (process.env.RESEND_API_KEY || "").trim();
+const RESEND_FROM = (process.env.RESEND_FROM || "TeVende <onboarding@resend.dev>").trim();
+
+async function sendVerificationEmail(email, businessName, token) {
+  const verifyUrl = `${process.env.PUBLIC_BACKEND_URL || ""}/api/business/verify-email?token=${token}`;
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: RESEND_FROM,
+      to: email,
+      subject: "Confirma tu cuenta en TeVende",
+      html: `
+        <p>Hola,</p>
+        <p>Falta un paso para activar la cuenta de <b>${businessName}</b> en TeVende.</p>
+        <p><a href="${verifyUrl}" style="background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Confirmar mi cuenta</a></p>
+        <p>Si el botón no funciona, copia y pega este link en tu navegador:<br/>${verifyUrl}</p>
+      `,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error("Error de Resend: " + err);
+  }
+}
 const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
 
 // Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
@@ -227,16 +254,25 @@ app.get("/api/business/:slug", async (req, res) => {
   res.json({ slug: business.slug, name: business.name, greeting: business.greeting, logoData: business.logo_data, menuItems });
 });
 
-// Autoregistro: crea un negocio nuevo sin intervención manual. Protegido con un código de
-// invitación simple (para que no cualquiera en internet cree negocios), no con la clave del panel
-// (esa la elige el propio negocio en este mismo formulario).
+// Autoregistro: crea un negocio nuevo sin intervención manual. Protegido con captcha (para que no
+// sea un bot) y verificación de correo (para que sea un correo real) — no con un código que Gonzalo
+// tenga que repartir a mano, así escala sin que él intervenga en cada registro.
 app.post("/api/business/signup", async (req, res) => {
-  const { name, password, invite_code } = req.body;
-  if (process.env.SIGNUP_INVITE_CODE && invite_code !== process.env.SIGNUP_INVITE_CODE) {
-    return res.status(401).json({ error: "Código de invitación incorrecto" });
+  const { name, email, password, captchaToken } = req.body;
+  if (!name || !name.trim() || !email || !email.trim() || !password || !password.trim()) {
+    return res.status(400).json({ error: "Falta el nombre del negocio, el correo o la clave" });
   }
-  if (!name || !name.trim() || !password || !password.trim()) {
-    return res.status(400).json({ error: "Falta el nombre del negocio o la clave" });
+
+  if (RECAPTCHA_SECRET_KEY) {
+    const captchaRes = await fetch("https://www.google.com/recaptcha/api/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ secret: RECAPTCHA_SECRET_KEY, response: captchaToken || "" }),
+    });
+    const captchaData = await captchaRes.json();
+    if (!captchaData.success) {
+      return res.status(400).json({ error: "No pudimos verificar que no eres un robot. Intenta de nuevo." });
+    }
   }
 
   const baseSlug = name
@@ -256,13 +292,47 @@ app.post("/api/business/signup", async (req, res) => {
     slug = `${baseSlug}-${suffix}`;
   }
 
+  const verifyToken = crypto.randomBytes(24).toString("hex");
+
   await pool.query(
-    `insert into businesses (slug, name, dashboard_password, greeting)
-     values ($1, $2, $3, $4)`,
-    [slug, name.trim(), password.trim(), `¡Bienvenido a ${name.trim()}! Cuéntanos qué buscas y te ayudamos a encontrarlo.`]
+    `insert into businesses (slug, name, dashboard_password, greeting, email, email_verified, email_verify_token)
+     values ($1, $2, $3, $4, $5, false, $6)`,
+    [
+      slug,
+      name.trim(),
+      password.trim(),
+      `¡Bienvenido a ${name.trim()}! Cuéntanos qué buscas y te ayudamos a encontrarlo.`,
+      email.trim(),
+      verifyToken,
+    ]
   );
 
-  res.json({ slug });
+  try {
+    await sendVerificationEmail(email.trim(), name.trim(), verifyToken);
+  } catch (e) {
+    console.error("Error enviando correo de verificación:", e);
+    return res.status(502).json({ error: "No pudimos enviarte el correo de verificación. Intenta de nuevo." });
+  }
+
+  res.json({ pendingVerification: true, email: email.trim() });
+});
+
+// El link del correo de verificación llega aquí. Confirma el correo y manda de vuelta al sitio,
+// que ahí sí muestra los links del negocio ya activado.
+app.get("/api/business/verify-email", async (req, res) => {
+  const { token } = req.query;
+  const redirectBase = process.env.FRONTEND_APP_URL || "";
+  if (!token) return res.redirect(`${redirectBase}/signup.html?verify=error`);
+
+  const { rows } = await pool.query("select slug from businesses where email_verify_token = $1", [token]);
+  const business = rows[0];
+  if (!business) return res.redirect(`${redirectBase}/signup.html?verify=error`);
+
+  await pool.query(
+    "update businesses set email_verified = true, email_verify_token = null where slug = $1",
+    [business.slug]
+  );
+  res.redirect(`${redirectBase}/signup.html?verify=ok&negocio=${business.slug}`);
 });
 
 // Helper compartido: busca el negocio por slug y valida la clave del panel (header x-dashboard-key).
@@ -276,6 +346,10 @@ async function getBusinessWithAuth(req, res) {
   }
   if (business.dashboard_password && req.headers["x-dashboard-key"] !== business.dashboard_password) {
     res.status(401).json({ error: "Clave incorrecta" });
+    return null;
+  }
+  if (business.email && !business.email_verified) {
+    res.status(403).json({ error: "Todavía no confirmaste tu correo. Revisa tu bandeja de entrada." });
     return null;
   }
   return business;
@@ -1053,7 +1127,7 @@ function checkAdminAuth(req, res) {
 app.get("/api/admin/businesses", async (req, res) => {
   if (!checkAdminAuth(req, res)) return;
   const { rows } = await pool.query(
-    "select slug, name, subscription_status, last_payment_date, created_at from businesses order by created_at desc"
+    "select slug, name, subscription_status, last_payment_date, invoice_status, created_at from businesses order by created_at desc"
   );
   res.json({ businesses: rows });
 });
@@ -1064,6 +1138,17 @@ app.put("/api/admin/businesses/:slug/last-payment", async (req, res) => {
   const { last_payment_date } = req.body;
   await pool.query("update businesses set last_payment_date=$1 where slug=$2", [
     last_payment_date || null,
+    req.params.slug,
+  ]);
+  res.json({ saved: true });
+});
+
+// Marca si ya emitiste la boleta/factura de ese negocio.
+app.put("/api/admin/businesses/:slug/invoice-status", async (req, res) => {
+  if (!checkAdminAuth(req, res)) return;
+  const { invoice_status } = req.body;
+  await pool.query("update businesses set invoice_status=$1 where slug=$2", [
+    invoice_status === "emitida" ? "emitida" : "pendiente",
     req.params.slug,
   ]);
   res.json({ saved: true });
