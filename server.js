@@ -496,6 +496,8 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     subscription_status: business.subscription_status,
     last_payment_date: business.last_payment_date,
     mp_checkout_url: business.mp_checkout_url,
+    subscription_billing_name: business.subscription_billing_name,
+    subscription_billing_rut: business.subscription_billing_rut,
     logo_data: business.logo_data,
     google_sheets_enabled: business.google_sheets_enabled,
     google_spreadsheet_url: business.google_spreadsheet_url,
@@ -1427,8 +1429,11 @@ app.post("/api/business/:slug/subscription/create", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
 
-  const { email } = req.body;
+  const { email, billing_name, billing_rut } = req.body;
   if (!email) return res.status(400).json({ error: "Falta el correo del negocio" });
+  if (!billing_name || !billing_rut) {
+    return res.status(400).json({ error: "Falta el nombre o razón social y el RUT para la suscripción" });
+  }
 
   try {
     const mpRes = await fetch("https://api.mercadopago.com/preapproval", {
@@ -1455,8 +1460,9 @@ app.post("/api/business/:slug/subscription/create", async (req, res) => {
     }
 
     await pool.query(
-      "update businesses set mp_preapproval_id=$1, subscription_email=$2, subscription_status='pending', mp_checkout_url=$4 where id=$3",
-      [data.id, email, business.id, data.init_point]
+      `update businesses set mp_preapproval_id=$1, subscription_email=$2, subscription_status='pending', mp_checkout_url=$3,
+       subscription_billing_name=$4, subscription_billing_rut=$5 where id=$6`,
+      [data.id, email, data.init_point, billing_name.trim(), billing_rut.trim(), business.id]
     );
     res.json({ checkoutUrl: data.init_point });
   } catch (e) {
@@ -1524,7 +1530,9 @@ function checkAdminAuth(req, res) {
 app.get("/api/admin/businesses", async (req, res) => {
   if (!checkAdminAuth(req, res)) return;
   const { rows } = await pool.query(
-    "select slug, name, subscription_status, last_payment_date, invoice_status, created_at from businesses order by created_at desc"
+    `select slug, name, subscription_status, last_payment_date, invoice_status, created_at,
+     subscription_billing_name, subscription_billing_rut
+     from businesses order by created_at desc`
   );
   res.json({ businesses: rows });
 });

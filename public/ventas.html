@@ -361,15 +361,24 @@
       <h2>Tu suscripción TeVende</h2>
       <div id="subInactive">
         <p style="font-size:13px; color:var(--muted); margin:0 0 12px;">$5.000 al mes, se cobra automático por Mercado Pago. Sin esto, tu agente deja de estar activo.</p>
+        <p style="font-size:12px; color:var(--muted); margin:0 0 10px; font-style:italic;">Necesitamos tu nombre o razón social y RUT para poder emitirte la boleta/factura — Mercado Pago no siempre entrega un nombre real del pagador.</p>
         <label>Correo para la suscripción</label>
         <input id="subEmail" placeholder="tu@correo.cl" />
+        <label>Nombre o razón social</label>
+        <input id="subBillingName" placeholder="Ej: Panadería Los Aromos SpA" />
+        <label>RUT</label>
+        <input id="subBillingRut" placeholder="Ej: 12.345.678-9" />
         <div class="save-row"><button onclick="startSubscription()">Suscribirme ($5.000/mes)</button></div>
       </div>
       <div id="subPending" style="display:none;">
         <p style="font-size:13px; color:#8A6D00; margin:0 0 12px;">Iniciaste la suscripción pero falta completar el pago. <a href="#" id="subContinueLink" style="color:var(--coral); font-weight:700;">Continuar pago</a></p>
         <label>¿No funciona? Reintenta con tu correo</label>
         <input id="subEmailRetry" placeholder="tu@correo.cl" />
-        <div class="save-row"><button onclick="startSubscription('subEmailRetry')">Generar link nuevo</button></div>
+        <label>Nombre o razón social</label>
+        <input id="subBillingNameRetry" placeholder="Ej: Panadería Los Aromos SpA" />
+        <label>RUT</label>
+        <input id="subBillingRutRetry" placeholder="Ej: 12.345.678-9" />
+        <div class="save-row"><button onclick="startSubscription('Retry')">Generar link nuevo</button></div>
       </div>
       <div id="subActive" style="display:none;">
         <p style="font-size:13px; color:#1E7B34; font-weight:700; margin:0 0 10px;">✓ Suscripción activa</p>
@@ -508,13 +517,17 @@
     }
   }
 
-  async function startSubscription(emailFieldId) {
-    const email = document.getElementById(emailFieldId || "subEmail").value.trim();
+  async function startSubscription(suffix) {
+    suffix = suffix || "";
+    const email = document.getElementById(`subEmail${suffix}`).value.trim();
+    const billingName = document.getElementById(`subBillingName${suffix}`).value.trim();
+    const billingRut = document.getElementById(`subBillingRut${suffix}`).value.trim();
     if (!email) { alert("Ingresa tu correo primero."); return; }
+    if (!billingName || !billingRut) { alert("Ingresa el nombre o razón social y el RUT — los necesitamos para la boleta/factura."); return; }
     const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/subscription/create`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, billing_name: billingName, billing_rut: billingRut }),
     });
     const data = await res.json();
     if (!res.ok || !data.checkoutUrl) { alert(data.error || "No se pudo iniciar la suscripción."); return; }
