@@ -652,16 +652,29 @@ app.put("/api/business/:slug/menu-items/bulk", async (req, res) => {
     return res.status(400).json({ error: "No se reconoció ningún producto en el texto pegado" });
   }
 
-  await pool.query("delete from menu_items where business_id = $1", [business.id]);
-  for (const item of items) {
-    await pool.query("insert into menu_items (business_id, name, price, category) values ($1,$2,$3,$4)", [
-      business.id,
-      item.name,
-      item.price,
-      item.category,
-    ]);
+  // Todo o nada: si un producto falla al insertarse a mitad de camino, no queremos terminar
+  // con el catálogo ya borrado y solo la mitad de los productos nuevos cargados.
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("delete from menu_items where business_id = $1", [business.id]);
+    for (const item of items) {
+      await client.query("insert into menu_items (business_id, name, price, category) values ($1,$2,$3,$4)", [
+        business.id,
+        item.name,
+        item.price,
+        item.category,
+      ]);
+    }
+    await client.query("commit");
+    res.json({ replaced: items.length });
+  } catch (e) {
+    await client.query("rollback");
+    console.error("Error reemplazando el catálogo:", e);
+    res.status(500).json({ error: "No se pudo reemplazar el catálogo. Tu catálogo anterior sigue intacto." });
+  } finally {
+    client.release();
   }
-  res.json({ replaced: items.length });
 });
 
 // Recupera una conversación existente por sessionId (para restaurar el chat al recargar la página).
