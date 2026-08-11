@@ -207,6 +207,7 @@ function buildSystemPrompt(business, menuItems, customer) {
     paymentSection = `- Una vez confirmado, dile que le vas a enviar un link de pago seguro (Webpay) y escribe exactamente el marcador [LINK_PAGO] en su propia línea (nunca inventes una URL). El pago se confirma automáticamente al pagar, no hace falta pedir comprobante.`;
   } else if (hasBankDetails) {
     paymentSection = `- Una vez confirmado, indica que el pago es por transferencia bancaria y comparte los datos escribiendo exactamente el marcador [DATOS_BANCARIOS] (nunca inventes un número de cuenta). Pide el comprobante.
+- Avísale, con esos mismos datos, que tiene 24 horas para hacer la transferencia — si no llega el pago en ese plazo, el pedido se cancela automáticamente.
 - Si el cliente dice que ya transfirió, agradece y explica que el equipo verificará el pago antes de preparar el pedido. Nunca confirmes tú que el pago fue recibido.`;
   } else {
     paymentSection = `- La forma de pago se coordina directamente al momento de la entrega o el intercambio. No inventes datos bancarios ni digital de pago que no tengas.`;
@@ -824,7 +825,7 @@ app.get("/api/business/:slug/customers/:sessionId/messages", async (req, res) =>
 app.patch("/api/orders/:orderId/status", async (req, res) => {
   const { status } = req.body; // 'draft' | 'confirmado' | 'pago_avisado' | 'pago_verificado' | 'cancelado'
   const { rows: orderRows } = await pool.query(
-    "select o.id, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
+    "select o.conversation_id, o.status as previous_status, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
     [req.params.orderId]
   );
   const row = orderRows[0];
@@ -839,6 +840,12 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
     req.params.orderId,
   ]);
   syncOrderToSheetSafe(row, rows[0]);
+
+  if (status === "pago_verificado" && row.previous_status !== "pago_verificado") {
+    notifyPaymentVerified(row, row.conversation_id).catch((e) =>
+      console.error("Error avisándole al cliente que su pago fue verificado:", e)
+    );
+  }
   res.json(rows[0]);
 });
 
@@ -933,6 +940,24 @@ async function sendWhatsappMessage(business, to, text) {
   if (!res.ok) {
     const err = await res.text();
     console.error("Error enviando mensaje de WhatsApp:", res.status, err);
+  }
+}
+
+// Le avisa al cliente que su pago quedó verificado: queda guardado en el historial del chat
+// (lo ve si vuelve a abrir el chat web) y, si escribió por WhatsApp, se lo mandamos también ahí.
+async function notifyPaymentVerified(business, conversationId) {
+  if (!conversationId) return;
+  const text = "¡Buenas noticias! Confirmamos que recibimos tu pago. Ya estamos preparando tu pedido.";
+
+  await pool.query("insert into messages (conversation_id, role, content) values ($1, 'assistant', $2)", [
+    conversationId,
+    text,
+  ]);
+
+  const { rows: convRows } = await pool.query("select session_id from conversations where id = $1", [conversationId]);
+  const sessionId = convRows[0] && convRows[0].session_id;
+  if (sessionId && sessionId.startsWith("whatsapp-") && business.whatsapp_phone_number_id && business.whatsapp_access_token) {
+    await sendWhatsappMessage(business, sessionId.slice("whatsapp-".length), text);
   }
 }
 
@@ -1277,6 +1302,34 @@ app.delete("/api/admin/businesses/:slug", async (req, res) => {
 
   res.json({ deleted: true });
 });
+
+// Cancela solos los pedidos por transferencia bancaria que llevan más de 24 horas confirmados
+// sin que se verifique el pago (el agente le avisa este mismo plazo al cliente). No toca pedidos
+// pagados con Webpay (webpay_token) ni los que se pagan al recibir (sin datos bancarios).
+const PLAZO_TRANSFERENCIA_HORAS = 24;
+async function cancelarPedidosVencidos() {
+  try {
+    const { rows } = await pool.query(
+      `update orders o set status = 'cancelado'
+       from businesses b
+       where o.business_id = b.id
+         and o.status in ('confirmado', 'pago_avisado')
+         and o.webpay_token is null
+         and b.bank_account_number is not null
+         and o.confirmed_at < now() - interval '1 hour' * $1
+       returning o.*, b.id as biz_id`,
+      [PLAZO_TRANSFERENCIA_HORAS]
+    );
+    for (const order of rows) {
+      const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
+      syncOrderToSheetSafe(bizRows[0], order);
+    }
+  } catch (e) {
+    console.error("Error cancelando pedidos vencidos por falta de pago:", e);
+  }
+}
+setInterval(cancelarPedidosVencidos, 30 * 60 * 1000);
+cancelarPedidosVencidos();
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
