@@ -1530,7 +1530,7 @@ function checkAdminAuth(req, res) {
 app.get("/api/admin/businesses", async (req, res) => {
   if (!checkAdminAuth(req, res)) return;
   const { rows } = await pool.query(
-    `select slug, name, subscription_status, last_payment_date, invoice_status, created_at,
+    `select slug, name, email, subscription_status, last_payment_date, invoice_status, created_at,
      subscription_billing_name, subscription_billing_rut
      from businesses order by created_at desc`
   );

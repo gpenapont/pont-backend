@@ -88,7 +88,7 @@
             <a href="${ventasUrl}" target="_blank">Panel</a>
           </td>
           <td><span class="status st-${status}">${STATUS_LABEL[status] || status}</span></td>
-          <td style="font-size:12px;">${b.subscription_billing_name || "<span style=\"color:var(--muted);\">—</span>"}${b.subscription_billing_rut ? `<br/><span style="color:var(--muted);">${b.subscription_billing_rut}</span>` : ""}</td>
+          <td style="font-size:12px;">${b.subscription_billing_name || "<span style=\"color:var(--muted);\">—</span>"}${b.subscription_billing_rut ? `<br/><span style="color:var(--muted);">${b.subscription_billing_rut}</span>` : ""}${b.email ? `<br/><span style="color:var(--muted);">${b.email}</span>` : ""}</td>
           <td><input type="date" value="${dateVal}" onchange="updatePaymentDate('${b.slug}', this.value)" /></td>
           <td>
             <select class="invoice-select invoice-${invoiceStatus}" onchange="updateInvoiceStatus('${b.slug}', this.value, this)">

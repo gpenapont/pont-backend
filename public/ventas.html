@@ -323,6 +323,15 @@
         <div class="save-row"><button onclick="replaceCatalog()">Reemplazar catálogo completo</button></div>
       </details>
 
+      <div class="item-row" style="border-bottom:none; padding-bottom:0;">
+        <div class="item-field"><span class="field-label" style="margin-top:0;">Foto</span></div>
+        <div class="item-field name-field"><span class="field-label" style="margin-top:0;">Producto</span></div>
+        <div class="item-field price-field"><span class="field-label" style="margin-top:0;">Precio</span></div>
+        <div class="item-field category-field"><span class="field-label" style="margin-top:0;">Categoría (opcional)</span></div>
+        <div class="item-field stock-field"><span class="field-label" style="margin-top:0;">Stock</span></div>
+        <span class="field-label" style="margin-top:0; flex-shrink:0; width:50px;">Activo</span>
+        <span class="field-label" style="margin-top:0; flex-shrink:0; width:70px;"></span>
+      </div>
       <div id="itemsList"></div>
       <div class="item-row" style="margin-top:10px;">
         <input class="name" id="newName" placeholder="Nombre del producto" />
@@ -1012,23 +1021,18 @@
             ${it.has_image ? `<img src="${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${it.id}/image" />` : `<div class="no-photo"></div>`}
             <input type="file" accept="image/*" style="display:none;" onchange="uploadItemImage('${it.id}', this)" />
           </label>
-          <span class="field-label">Foto</span>
         </div>
         <div class="item-field name-field">
           <input class="name" value="${(it.name || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="name" />
-          <span class="field-label">Producto</span>
         </div>
         <div class="item-field price-field">
           <input class="price" type="number" value="${it.price}" onchange="updateItem('${it.id}', this)" data-field="price" />
-          <span class="field-label">Precio</span>
         </div>
         <div class="item-field category-field">
           <input class="category" value="${(it.category || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="category" />
-          <span class="field-label">Categoría (opcional)</span>
         </div>
         <div class="item-field stock-field">
           <input class="stock" type="number" min="0" placeholder="Sin límite" title="Stock (vacío = sin trackear)" value="${it.stock === null || it.stock === undefined ? "" : it.stock}" onchange="updateItem('${it.id}', this)" data-field="stock" />
-          <span class="field-label">Stock</span>
         </div>
         <label class="active-toggle" style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" style="width:auto;" ${it.active ? "checked" : ""} onchange="updateItem('${it.id}', this)" data-field="active" /> activo
