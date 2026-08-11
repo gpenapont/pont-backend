@@ -1470,26 +1470,41 @@ app.post("/api/mercadopago/webhook", async (req, res) => {
   res.sendStatus(200); // confirmar recepción rápido
 
   try {
-    const preapprovalId = req.query["data.id"] || (req.body.data && req.body.data.id);
+    const dataId = req.query["data.id"] || (req.body.data && req.body.data.id);
     const type = req.query.type || req.body.type;
-    if (type !== "subscription_preapproval" && type !== "preapproval") return;
-    if (!preapprovalId) return;
+    if (!dataId) return;
 
-    const mpRes = await fetch(`https://api.mercadopago.com/preapproval/${preapprovalId}`, {
-      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
-    });
-    const preapproval = await mpRes.json();
-    if (!mpRes.ok || !preapproval.external_reference) return;
+    if (type === "subscription_preapproval" || type === "preapproval") {
+      // Se dispara cuando cambia el estado de la suscripción en sí (autorizada, pausada, cancelada).
+      const mpRes = await fetch(`https://api.mercadopago.com/preapproval/${dataId}`, {
+        headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+      });
+      const preapproval = await mpRes.json();
+      if (!mpRes.ok || !preapproval.external_reference) return;
 
-    if (preapproval.status === "authorized") {
-      await pool.query("update businesses set subscription_status=$1, last_payment_date=now() where slug=$2", [
-        preapproval.status,
-        preapproval.external_reference,
-      ]);
-    } else {
-      await pool.query("update businesses set subscription_status=$1 where slug=$2", [
-        preapproval.status, // 'authorized' | 'paused' | 'cancelled'
-        preapproval.external_reference,
+      if (preapproval.status === "authorized") {
+        await pool.query("update businesses set subscription_status=$1, last_payment_date=now() where slug=$2", [
+          preapproval.status,
+          preapproval.external_reference,
+        ]);
+      } else {
+        await pool.query("update businesses set subscription_status=$1 where slug=$2", [
+          preapproval.status, // 'authorized' | 'paused' | 'cancelled'
+          preapproval.external_reference,
+        ]);
+      }
+    } else if (type === "payment") {
+      // Cada cobro de la suscripción (el primero y los siguientes meses) llega como notificación
+      // de pago, no de preapproval — sin este caso, last_payment_date nunca se actualizaría después
+      // del primer mes.
+      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${dataId}`, {
+        headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+      });
+      const payment = await mpRes.json();
+      if (!mpRes.ok || !payment.external_reference || payment.status !== "approved") return;
+
+      await pool.query("update businesses set subscription_status='authorized', last_payment_date=now() where slug=$1", [
+        payment.external_reference,
       ]);
     }
   } catch (e) {
