@@ -79,8 +79,9 @@
       const ventasUrl = `${SITE_URL}/ventas.html?negocio=${b.slug}&admin_key=${encodeURIComponent(getKey() || "")}`;
       const status = b.subscription_status || "inactive";
       const dateVal = b.last_payment_date ? new Date(b.last_payment_date).toISOString().slice(0, 10) : "";
-      const todayVal = new Date().toISOString().slice(0, 10);
-      const overdue = dateVal && dateVal < todayVal;
+      const daysSincePayment = dateVal ? (Date.now() - new Date(dateVal).getTime()) / 86400000 : null;
+      const overdue = daysSincePayment !== null && daysSincePayment > 30;
+      const dateColor = !dateVal ? "" : overdue ? "color:#C0392B; font-weight:700;" : "color:#1E7B34; font-weight:700;";
       const invoiceStatus = b.invoice_status === "emitida" ? "emitida" : "pendiente";
       return `
         <tr>
@@ -90,8 +91,8 @@
             <a href="${ventasUrl}" target="_blank">Panel</a>
           </td>
           <td><span class="status st-${status}">${STATUS_LABEL[status] || status}</span></td>
-          <td style="font-size:12px;">${b.subscription_billing_name || "<span style=\"color:var(--muted);\">—</span>"}${b.subscription_billing_rut ? `<br/><span style="color:var(--muted);">${b.subscription_billing_rut}</span>` : ""}${b.email ? `<br/><span style="color:var(--muted);">${b.email}</span>` : ""}</td>
-          <td><input type="date" value="${dateVal}" style="${overdue ? "color:#C0392B; font-weight:700;" : ""}" onchange="updatePaymentDate('${b.slug}', this.value); markOverdue(this);" /></td>
+          <td style="font-size:12px;">${b.subscription_billing_name || "<span style=\"color:var(--muted);\">—</span>"}${b.subscription_billing_rut ? `<br/><span style="color:var(--muted);">${b.subscription_billing_rut}</span>` : ""}${b.subscription_email ? `<br/><span style="color:var(--muted);">${b.subscription_email}</span>` : ""}</td>
+          <td><input type="date" value="${dateVal}" style="${dateColor}" onchange="updatePaymentDate('${b.slug}', this.value); markOverdue(this);" /></td>
           <td>
             <select class="invoice-select invoice-${invoiceStatus}" onchange="updateInvoiceStatus('${b.slug}', this.value, this)">
               <option value="pendiente" ${invoiceStatus === "pendiente" ? "selected" : ""}>Boleta/Factura pendiente</option>
@@ -104,9 +105,15 @@
   }
 
   function markOverdue(input) {
-    const overdue = input.value && input.value < new Date().toISOString().slice(0, 10);
-    input.style.color = overdue ? "#C0392B" : "";
-    input.style.fontWeight = overdue ? "700" : "normal";
+    if (!input.value) {
+      input.style.color = "";
+      input.style.fontWeight = "normal";
+      return;
+    }
+    const daysSincePayment = (Date.now() - new Date(input.value).getTime()) / 86400000;
+    const overdue = daysSincePayment > 30;
+    input.style.color = overdue ? "#C0392B" : "#1E7B34";
+    input.style.fontWeight = "700";
   }
 
   async function updatePaymentDate(slug, value) {

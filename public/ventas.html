@@ -398,7 +398,14 @@
         <p style="font-size:12.5px; color:var(--muted); margin:2px 0 0;">Próximo pago estimado: <b id="subNextPayment">—</b></p>
       </div>
       <div id="subOther" style="display:none;">
-        <p style="font-size:13px; color:var(--coral); font-weight:700; margin:0;" id="subOtherMsg"></p>
+        <p style="font-size:13px; color:var(--coral); font-weight:700; margin:0 0 12px;" id="subOtherMsg"></p>
+        <label>Correo para la suscripción</label>
+        <input id="subEmailReactivate" placeholder="tu@correo.cl" />
+        <label>Nombre o razón social</label>
+        <input id="subBillingNameReactivate" placeholder="Ej: Panadería Los Aromos SpA" />
+        <label>RUT</label>
+        <input id="subBillingRutReactivate" placeholder="Ej: 12.345.678-9" />
+        <div class="save-row"><button onclick="startSubscription('Reactivate')">Reactivar suscripción ($5.000/mes)</button></div>
       </div>
     </div>
   </div>
