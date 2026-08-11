@@ -669,23 +669,29 @@ async function processMessage(business, sessionId, message) {
   // Guarda o actualiza el pedido PRIMERO, para tener su id disponible al armar el link de pago.
   let orderSnapshot = null;
   if (parsedOrder) {
-    const { rows: openOrders } = await pool.query(
-      "select * from orders where conversation_id = $1 and status not in ('pago_verificado', 'cancelado') order by created_at desc limit 1",
+    const { rows: recentOrders } = await pool.query(
+      "select * from orders where conversation_id = $1 order by created_at desc limit 1",
       [conversation.id]
     );
+    const latestOrder = recentOrders[0];
+    const latestClosed = latestOrder && (latestOrder.status === "pago_verificado" || latestOrder.status === "cancelado");
     const status = deriveOrderStatus(parsedOrder);
     const delivery = parsedOrder.delivery || {};
     const customerName = parsedOrder.customer_name || (customer && customer.name) || null;
 
-    if (openOrders[0]) {
+    if (latestOrder && !latestClosed) {
       const updated = await pool.query(
         `update orders set items=$1, total=$2, delivery_type=$3, delivery_address=$4, status=$5, customer_name=$6,
          confirmed_at = case when confirmed_at is null and $5 <> 'draft' then now() else confirmed_at end
          where id=$7 returning *`,
-        [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, openOrders[0].id]
+        [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, latestOrder.id]
       );
       orderSnapshot = updated.rows[0];
-    } else if (status !== "draft" || (parsedOrder.items || []).length > 0) {
+    } else if ((!latestClosed || status === "draft") && (status !== "draft" || (parsedOrder.items || []).length > 0)) {
+      // O es el primer pedido de la conversación, o el último ya se cerró (pagado/cancelado)
+      // y el cliente claramente está armando uno nuevo y todavía sin confirmar. Si en cambio
+      // el último pedido ya se cerró y Claude sigue repitiendo un estado confirmado (porque no
+      // sabe que se cerró), no se crea nada — evita duplicar el pedido que ya se pagó/canceló.
       const inserted = await pool.query(
         `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, customer_name, confirmed_at)
          values ($1,$2,$3,$4,$5,$6,$7,$8, case when $7 <> 'draft' then now() else null end) returning *`,

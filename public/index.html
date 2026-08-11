@@ -259,6 +259,9 @@
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
+  let renderedCount = 0; // cuántos mensajes reales (de la base de datos) ya se muestran
+  let sending = false;
+
   async function init() {
     try {
       const bizRes = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}`);
@@ -275,6 +278,7 @@
       const hist = await histRes.json();
       if (hist.messages && hist.messages.length) {
         hist.messages.forEach((m) => addMsg(m.role, m.content, m.role === "user"));
+        renderedCount = hist.messages.length;
       } else {
         addMsg("assistant", biz.greeting || "¡Bienvenido! Cuéntanos qué buscas y te ayudamos a encontrarlo.", false);
       }
@@ -288,9 +292,29 @@
     }
   }
 
+  // El negocio a veces le manda un mensaje al cliente desde su panel (por ejemplo, al confirmar
+  // que verificó el pago) sin que el cliente haya escrito nada. Como el chat no tiene push en
+  // vivo, cada cierto tiempo revisamos si llegó algo nuevo mientras la pestaña sigue abierta.
+  async function pollHistory() {
+    if (sending) return;
+    try {
+      const histRes = await fetch(`${BACKEND_URL}/api/chat/${BUSINESS_SLUG}/history?sessionId=${sessionId}`);
+      const hist = await histRes.json();
+      const msgs = hist.messages || [];
+      if (msgs.length > renderedCount) {
+        msgs.slice(renderedCount).forEach((m) => addMsg(m.role, m.content, m.role === "user"));
+        renderedCount = msgs.length;
+      }
+      if (hist.order) renderOrder(hist.order);
+    } catch (e) {
+      // Falla silenciosa: no queremos interrumpir al cliente por un poll que no resultó.
+    }
+  }
+
   async function send() {
     const text = inputEl.value.trim();
     if (!text) return;
+    sending = true;
     addMsg("user", text, true);
     inputEl.value = "";
     sendBtn.disabled = true;
@@ -304,11 +328,13 @@
       const data = await res.json();
       showTyping(false);
       addMsg("assistant", data.reply || "Perdona, ¿puedes repetir eso?", false);
+      renderedCount += 2;
       if (data.order) renderOrder(data.order);
     } catch (e) {
       showTyping(false);
       addMsg("assistant", "No pude conectarme. Intenta de nuevo.", false);
     } finally {
+      sending = false;
       sendBtn.disabled = false;
       inputEl.focus();
     }
@@ -317,6 +343,7 @@
   sendBtn.addEventListener("click", send);
   inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
   init();
+  setInterval(pollHistory, 15000);
 </script>
 </body>
 </html>
