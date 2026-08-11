@@ -97,6 +97,7 @@
     padding: 9px 18px; border-radius: 20px; text-decoration: none; font-weight: 700; font-size: 13.5px;
   }
   .bubble a:not(.pay-link) { color: var(--wa-green-dark); font-weight: 600; }
+  .product-photo { display: block; max-width: 100%; margin-top: 6px; border-radius: 8px; }
 
   .order-card {
     background: var(--wa-bubble-in);
@@ -200,6 +201,9 @@
     return escapeHtml(text).replace(/(https?:\/\/[^\s]+)/g, (url) => {
       if (url.includes("/api/webpay/")) {
         return `<br/><a class="pay-link" href="${url}" target="_blank" rel="noopener">Pagar ahora →</a>`;
+      }
+      if (url.includes("/menu-items/") && url.includes("/image")) {
+        return `<br/><img src="${url}" class="product-photo" alt="Foto del producto" />`;
       }
       return `<a href="${url}" target="_blank" rel="noopener">${url}</a>`;
     });

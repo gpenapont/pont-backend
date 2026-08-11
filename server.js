@@ -198,7 +198,10 @@ function buildDeliverySection(b) {
 }
 
 function buildSystemPrompt(business, menuItems, customer) {
-  const menuText = menuItems.map((i) => `- ${i.name}: $${i.price.toLocaleString("es-CL")}`).join("\n");
+  const menuText = menuItems
+    .map((i) => `- ${i.name}: $${i.price.toLocaleString("es-CL")}${i.has_image ? ` [id:${i.id}, tiene foto disponible]` : ""}`)
+    .join("\n");
+  const hasAnyPhoto = menuItems.some((i) => i.has_image);
   const hasBankDetails = !!business.bank_account_number;
   const hasWebpay = !!business.webpay_enabled;
 
@@ -239,6 +242,7 @@ Tu trabajo:
 - Si el negocio especificó algún costo de despacho en sus instrucciones propias (más arriba), y el cliente elige despacho a domicilio, agrégalo como un ítem más en la lista de productos (por ejemplo "Despacho a domicilio" con su precio), para que quede visible en el desglose y no escondido dentro del total. Si el negocio dice que el despacho se cotiza aparte sin dar un monto fijo, no inventes un número — dilo así de claro.
 - Responder en español neutro, amable pero sin modismos chilenos informales (nada de "bacán", "al tiro", "cachai", "po") y sin sonar tampoco excesivamente formal o robótico. Mantén las respuestas razonablemente breves, salvo que las instrucciones del negocio (más arriba) pidan un estilo más extenso, como explicaciones o recomendaciones detalladas. Sin markdown ni asteriscos.
 - Si el cliente indica que no quiere agregar nada más (por ejemplo "nada más", "eso es todo", "solo eso", "no gracias"), no vuelvas a preguntar si quiere algo más. Avanza directo al siguiente paso: si falta el tipo de entrega, pregúntalo; si ya lo tienes, resume el pedido completo y pide confirmación.
+${hasAnyPhoto ? `- Algunos productos del catálogo tienen foto disponible (marcados con "tiene foto disponible" y su id). Si el cliente pide ver una foto, o si ayuda mostrarla al recomendar ese producto, escribe el marcador [FOTO:<id>] en su propia línea, usando el id exacto que aparece junto al producto — nunca inventes un id ni muestres fotos de productos que no la tengan marcada. Puedes incluir varios marcadores, uno por línea, si el cliente pide ver más de un producto.` : ""}
 - ${buildDeliverySection(business)}
 - Después resume lo que llevan, el nombre del cliente si lo sabes, el tipo de entrega con su dirección si aplica, y pregunta si está todo correcto.
 - Marcar el pedido como confirmado solo cuando el cliente lo confirme explícitamente.
@@ -390,7 +394,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
   if (!business) return;
 
   const { rows: menuItems } = await pool.query(
-    "select id, name, price, category, active from menu_items where business_id = $1 order by category, name",
+    "select id, name, price, category, active, image_data is not null as has_image from menu_items where business_id = $1 order by category, name",
     [business.id]
   );
   res.json({
@@ -493,6 +497,36 @@ app.delete("/api/business/:slug/menu-items/:itemId", async (req, res) => {
   res.json({ deleted: true });
 });
 
+// Ruta dedicada solo para la foto del producto, separada del resto para no arriesgar pisar
+// nombre/precio/categoría al subir una imagen (mismo patrón que el logo del negocio).
+app.put("/api/business/:slug/menu-items/:itemId/image", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+  const { image_data } = req.body;
+  await pool.query("update menu_items set image_data=$1 where id=$2 and business_id=$3", [
+    image_data || null,
+    req.params.itemId,
+    business.id,
+  ]);
+  res.json({ saved: true });
+});
+
+// Sirve la foto del producto en crudo (sin auth: la necesitan tanto el chat web público
+// como los servidores de WhatsApp para descargarla al mandarla como imagen nativa).
+app.get("/api/business/:slug/menu-items/:itemId/image", async (req, res) => {
+  const { rows } = await pool.query(
+    `select mi.image_data from menu_items mi join businesses b on b.id = mi.business_id
+     where b.slug = $1 and mi.id = $2`,
+    [req.params.slug, req.params.itemId]
+  );
+  const imageData = rows[0] && rows[0].image_data;
+  const match = imageData && imageData.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) return res.status(404).send("Sin imagen");
+  res.set("Content-Type", match[1]);
+  res.set("Cache-Control", "public, max-age=3600");
+  res.send(Buffer.from(match[2], "base64"));
+});
+
 // Interpreta texto pegado con un producto por línea: "Nombre, Precio, Categoría" o el mismo
 // formato separado por tabulaciones (lo que queda al copiar y pegar directo desde Excel o Sheets).
 function parseCatalogText(text) {
@@ -578,7 +612,7 @@ async function processMessage(business, sessionId, message) {
   }
 
   const { rows: menuItems } = await pool.query(
-    "select name, price from menu_items where business_id = $1 and active = true order by category, name",
+    "select id, name, price, image_data is not null as has_image from menu_items where business_id = $1 and active = true order by category, name",
     [business.id]
   );
 
@@ -714,6 +748,27 @@ async function processMessage(business, sessionId, message) {
     replyText = replyText.replace(/\[LINK_PAGO\]/g, "");
   }
   replyText = replyText.replace(/\[DATOS_BANCARIOS\]/g, formatBankDetails(business));
+
+  // Cambia cada [FOTO:<id>] por la URL pública de esa foto (solo si el producto es de este
+  // negocio y sí tiene una imagen cargada) — la misma URL sirve para mostrarla inline en el
+  // chat web y como "link" al mandarla como imagen nativa por WhatsApp.
+  const photoIdMatches = [...replyText.matchAll(/\[FOTO:([0-9a-f-]{36})\]/gi)];
+  const photos = [];
+  if (photoIdMatches.length) {
+    const ids = [...new Set(photoIdMatches.map((m) => m[1]))];
+    const { rows: photoItems } = await pool.query(
+      "select id from menu_items where business_id = $1 and id = any($2::uuid[]) and image_data is not null",
+      [business.id, ids]
+    );
+    const validIds = new Set(photoItems.map((r) => r.id));
+    replyText = replyText.replace(/\[FOTO:([0-9a-f-]{36})\]/gi, (full, id) => {
+      if (!validIds.has(id)) return "";
+      const url = `${PUBLIC_BACKEND_URL}/api/business/${business.slug}/menu-items/${id}/image`;
+      photos.push(url);
+      return url;
+    });
+  }
+
   if (!replyText.trim()) {
     replyText = parsedOrder && parsedOrder.confirmed
       ? "¡Listo! Tu pedido quedó confirmado."
@@ -726,7 +781,7 @@ async function processMessage(business, sessionId, message) {
   ]);
 
   syncOrderToSheetSafe(business, orderSnapshot);
-  return { replyText, order: orderSnapshot };
+  return { replyText, order: orderSnapshot, photos };
 }
 
 app.post("/api/chat/:slug", async (req, res) => {
@@ -739,8 +794,8 @@ app.post("/api/chat/:slug", async (req, res) => {
     const business = businessRows[0];
     if (!business) return res.status(404).json({ error: "Negocio no encontrado" });
 
-    const { replyText, order } = await processMessage(business, sessionId, message);
-    res.json({ reply: replyText, order });
+    const { replyText, order, photos } = await processMessage(business, sessionId, message);
+    res.json({ reply: replyText, order, photos });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error interno" });
@@ -968,6 +1023,28 @@ async function sendWhatsappMessage(business, to, text) {
   }
 }
 
+// Envía una foto de producto como mensaje de imagen nativo de WhatsApp — Meta descarga la
+// imagen directo desde nuestra URL pública, no hace falta subirla antes.
+async function sendWhatsappImage(business, to, imageUrl) {
+  const res = await fetch(`https://graph.facebook.com/v21.0/${business.whatsapp_phone_number_id}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${business.whatsapp_access_token}`,
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type: "image",
+      image: { link: imageUrl },
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error("Error enviando imagen de WhatsApp:", res.status, err);
+  }
+}
+
 // Le avisa al cliente que su pago quedó verificado: queda guardado en el historial del chat
 // (lo ve si vuelve a abrir el chat web) y, si escribió por WhatsApp, se lo mandamos también ahí.
 async function notifyPaymentVerified(business, conversationId) {
@@ -1056,8 +1133,14 @@ app.post("/api/whatsapp/webhook", async (req, res) => {
 
     if (isBotPaused(business)) return; // El negocio está atendiendo a mano en este momento, el bot no interviene.
 
-    const { replyText } = await processMessage(business, `whatsapp-${from}`, text);
-    await sendWhatsappMessage(business, from, replyText);
+    const { replyText, photos } = await processMessage(business, `whatsapp-${from}`, text);
+    // Las fotos van como mensajes de imagen nativos aparte, así que se sacan del texto
+    // para no mandar además el link pelado como si fuera parte de la respuesta.
+    const whatsappText = (photos || []).reduce((t, url) => t.split(url).join("").trim(), replyText);
+    if (whatsappText) await sendWhatsappMessage(business, from, whatsappText);
+    for (const url of photos || []) {
+      await sendWhatsappImage(business, from, url);
+    }
   } catch (err) {
     console.error("Error procesando webhook de WhatsApp:", err);
   }

@@ -44,6 +44,9 @@
   .item-row .category { flex: 1; }
   .item-row .active-toggle { flex-shrink: 0; }
   .item-row .del { flex-shrink: 0; background: var(--gray); color: var(--muted); }
+  .item-photo { flex-shrink: 0; cursor: pointer; }
+  .item-photo img { display: block; width: 34px; height: 34px; object-fit: cover; border-radius: 6px; border: 1.5px solid var(--gray); }
+  .item-photo .no-photo { width: 34px; height: 34px; border-radius: 6px; background: var(--gray); }
 
   .order-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .order-items { font-size: 13.5px; margin: 4px 0; }
@@ -906,6 +909,10 @@
     const list = document.getElementById("itemsList");
     list.innerHTML = currentItems.map((it) => `
       <div class="item-row">
+        <label class="item-photo" title="Cambiar foto">
+          ${it.has_image ? `<img src="${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${it.id}/image" />` : `<div class="no-photo"></div>`}
+          <input type="file" accept="image/*" style="display:none;" onchange="uploadItemImage('${it.id}', this)" />
+        </label>
         <input class="name" value="${(it.name || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="name" />
         <input class="price" type="number" value="${it.price}" onchange="updateItem('${it.id}', this)" data-field="price" />
         <input class="category" value="${(it.category || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="category" />
@@ -926,6 +933,28 @@
       method: "PUT", headers: authHeaders(),
       body: JSON.stringify({ name: item.name, price: item.price, category: item.category, active: item.active }),
     });
+  }
+
+  function uploadItemImage(id, input) {
+    const file = input.files[0];
+    if (!file) return;
+    if (file.size > 1.5 * 1024 * 1024) {
+      alert("La imagen es muy pesada (máximo ~1.5MB). Intenta con una más liviana.");
+      input.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${id}/image`, {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify({ image_data: reader.result }),
+      });
+      const item = currentItems.find((i) => i.id === id);
+      if (item) item.has_image = true;
+      renderItems();
+    };
+    reader.readAsDataURL(file);
   }
 
   async function deleteItem(id) {
