@@ -826,6 +826,25 @@ app.get("/api/business/:slug/customers/:sessionId/messages", async (req, res) =>
   res.json({ messages });
 });
 
+// Borra la conversación de un cliente puntual (mensajes, conversación y su ficha de cliente).
+// No toca sus pedidos — esos se administran aparte, desde la pestaña Pedidos.
+app.delete("/api/business/:slug/customers/:sessionId", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { rows: convRows } = await pool.query(
+    "select id from conversations where business_id = $1 and session_id = $2",
+    [business.id, req.params.sessionId]
+  );
+  if (convRows[0]) {
+    await pool.query("delete from messages where conversation_id = $1", [convRows[0].id]);
+    await pool.query("delete from conversations where id = $1", [convRows[0].id]);
+  }
+  await pool.query("delete from customers where business_id = $1 and session_id = $2", [business.id, req.params.sessionId]);
+
+  res.json({ deleted: true });
+});
+
 // El negocio marca manualmente que verificó la transferencia en su cuenta, o cambia el estado
 // a cualquier otro valor válido. Misma clave.
 app.patch("/api/orders/:orderId/status", async (req, res) => {

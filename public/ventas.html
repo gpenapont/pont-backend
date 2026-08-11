@@ -316,7 +316,10 @@
           <h2 style="margin-bottom:2px;" id="customerChatName">Cliente</h2>
           <div class="customer-address" id="customerChatAddress"></div>
         </div>
-        <button class="small secondary" onclick="closeCustomerChat()">Volver</button>
+        <div>
+          <button class="small" style="background:#5C6B76;" id="customerChatDeleteBtn" onclick="deleteCustomerChat()">Eliminar</button>
+          <button class="small secondary" onclick="closeCustomerChat()">Volver</button>
+        </div>
       </div>
       <div id="customerChatMessages" style="display:flex; flex-direction:column;"></div>
     </div>
@@ -728,18 +731,28 @@
           ${c.last_message_at ? new Date(c.last_message_at).toLocaleString("es-CL") : ""}<br/>
           ${c.message_count || 0} mensaje${c.message_count == 1 ? "" : "s"}
         </div>
+        <button class="small del-customer-btn" style="background:#5C6B76; flex-shrink:0;" data-session-id="${escapeHtml(c.session_id)}" data-name="${escapeHtml(c.name || "Cliente sin nombre")}">Eliminar</button>
       </div>`).join("");
   }
 
   // Los datos van en data-* (el navegador los decodifica solo), así evitamos tener que
   // escapar texto libre del cliente dentro de un atributo onclick.
   document.getElementById("customersList").addEventListener("click", (e) => {
+    const delBtn = e.target.closest(".del-customer-btn");
+    if (delBtn) {
+      e.stopPropagation();
+      deleteCustomerChat(delBtn.dataset.sessionId, delBtn.dataset.name);
+      return;
+    }
     const row = e.target.closest(".customer-row");
     if (!row) return;
     openCustomerChat(row.dataset.sessionId, row.dataset.name, row.dataset.address);
   });
 
+  let openCustomerSessionId = null;
+
   async function openCustomerChat(sessionId, name, address) {
+    openCustomerSessionId = sessionId;
     document.getElementById("customersCard").style.display = "none";
     const chatCard = document.getElementById("customerChatCard");
     chatCard.style.display = "block";
@@ -766,6 +779,22 @@
   function closeCustomerChat() {
     document.getElementById("customerChatCard").style.display = "none";
     document.getElementById("customersCard").style.display = "block";
+  }
+
+  // Sin argumentos: se llama desde el botón dentro del chat abierto, y usa el cliente
+  // que está viendo en ese momento. Con argumentos: se llama desde la lista.
+  async function deleteCustomerChat(sessionId, name) {
+    sessionId = sessionId || openCustomerSessionId;
+    name = name || document.getElementById("customerChatName").textContent;
+    if (!sessionId) return;
+    if (!confirm(`¿Eliminar la conversación con "${name}"? Se borra todo el historial de mensajes de este cliente. No se puede deshacer.`)) return;
+
+    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/customers/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    closeCustomerChat();
+    loadCustomers();
   }
 
   async function changeStatus(orderId, status) {
