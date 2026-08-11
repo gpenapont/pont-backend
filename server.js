@@ -52,6 +52,31 @@ async function sendVerificationEmail(email, businessName, token) {
     throw new Error("Error de Resend: " + err);
   }
 }
+
+async function sendPasswordResetEmail(email, businessName, slug, token) {
+  const resetUrl = `${process.env.FRONTEND_APP_URL || ""}/reset-password.html?negocio=${slug}&token=${token}`;
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: RESEND_FROM,
+      to: email,
+      subject: "Recupera tu clave de TeVende",
+      html: `
+        <p>Hola,</p>
+        <p>Recibimos una solicitud para cambiar la clave del panel de <b>${businessName}</b> en TeVende.</p>
+        <p><a href="${resetUrl}" style="display:inline-block;background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Elegir una clave nueva</a></p>
+        <p>Si el botón no funciona, copia y pega este link en tu navegador:<br/>${resetUrl}</p>
+        <p>Este link vence en 1 hora. Si no pediste esto, puedes ignorar el correo.</p>
+      `,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error("Error de Resend: " + err);
+  }
+}
+
 const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
 
 // Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
@@ -263,6 +288,20 @@ function deriveOrderStatus(parsedOrder) {
   return "confirmado";
 }
 
+// Descuenta stock al confirmarse el pago de un pedido. Solo toca productos que tengan stock
+// activado (columna no nula) — el resto sigue sin trackearse, como hasta ahora. Empareja por
+// nombre exacto contra el catálogo del negocio, que es lo único que guarda cada ítem del pedido.
+async function decrementStockForOrder(order) {
+  if (!order || !order.items || !order.items.length) return;
+  for (const it of order.items) {
+    if (!it.name || !it.qty) continue;
+    await pool.query(
+      "update menu_items set stock = greatest(stock - $1, 0) where business_id = $2 and name = $3 and stock is not null",
+      [it.qty, order.business_id, it.name]
+    );
+  }
+}
+
 // Endpoint público: lo consulta el frontend genérico al cargar, para saber
 // el nombre, el saludo y el catálogo del negocio. Nunca expone system_prompt_extra ni datos bancarios.
 // El link del correo de verificación llega aquí. Confirma el correo y manda de vuelta al sitio,
@@ -366,6 +405,49 @@ app.post("/api/business/signup", async (req, res) => {
 // El link del correo de verificación llega aquí. Confirma el correo y manda de vuelta al sitio,
 // que ahí sí muestra los links del negocio ya activado.
 
+// Pide el link de recuperación de clave. Responde igual exista o no una cuenta con ese correo
+// (para no revelar qué correos están registrados) — si existe, le llega un email de verdad.
+app.post("/api/business/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  if (!email || !email.trim()) return res.status(400).json({ error: "Falta el correo" });
+
+  const { rows } = await pool.query("select slug, name, email from businesses where lower(email) = lower($1)", [
+    email.trim(),
+  ]);
+  const business = rows[0];
+  if (business) {
+    const token = crypto.randomBytes(24).toString("hex");
+    await pool.query(
+      "update businesses set password_reset_token=$1, password_reset_expires=now() + interval '1 hour' where slug=$2",
+      [token, business.slug]
+    );
+    try {
+      await sendPasswordResetEmail(business.email, business.name, business.slug, token);
+    } catch (e) {
+      console.error("Error enviando correo de recuperación:", e);
+    }
+  }
+  res.json({ sent: true });
+});
+
+// Confirma el link de recuperación y guarda la clave nueva.
+app.post("/api/business/reset-password", async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password || !password.trim()) return res.status(400).json({ error: "Falta el token o la clave nueva" });
+
+  const { rows } = await pool.query(
+    "select slug from businesses where password_reset_token = $1 and password_reset_expires > now()",
+    [token]
+  );
+  const business = rows[0];
+  if (!business) return res.status(400).json({ error: "El link ya no es válido. Pide uno nuevo." });
+
+  await pool.query(
+    "update businesses set dashboard_password=$1, password_reset_token=null, password_reset_expires=null where slug=$2",
+    [password.trim(), business.slug]
+  );
+  res.json({ reset: true, slug: business.slug });
+});
 
 // Helper compartido: busca el negocio por slug y valida la clave del panel (header x-dashboard-key).
 // Devuelve la fila del negocio si todo bien, o null y ya responde el error si no.
@@ -394,7 +476,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
   if (!business) return;
 
   const { rows: menuItems } = await pool.query(
-    "select id, name, price, category, active, image_data is not null as has_image from menu_items where business_id = $1 order by category, name",
+    "select id, name, price, category, active, stock, image_data is not null as has_image from menu_items where business_id = $1 order by category, name",
     [business.id]
   );
   res.json({
@@ -425,6 +507,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     pickup_address: business.pickup_address,
     delivery_enabled: business.delivery_enabled !== false,
     delivery_rules: business.delivery_rules,
+    low_stock_threshold: business.low_stock_threshold,
     menuItems,
   });
 });
@@ -449,18 +532,21 @@ app.put("/api/business/:slug/settings", async (req, res) => {
     whatsapp_phone_number_id, whatsapp_access_token,
     bot_paused, pause_schedule_enabled, pause_schedule,
     pickup_enabled, pickup_address, delivery_enabled, delivery_rules,
+    low_stock_threshold,
   } = req.body;
   await pool.query(
     `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
      bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10,
      whatsapp_phone_number_id=$11, whatsapp_access_token=$12, bot_paused=$13, pause_schedule_enabled=$14, pause_schedule=$15,
-     pickup_enabled=$16, pickup_address=$17, delivery_enabled=$18, delivery_rules=$19
-     where id=$20`,
+     pickup_enabled=$16, pickup_address=$17, delivery_enabled=$18, delivery_rules=$19, low_stock_threshold=$20
+     where id=$21`,
     [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
      !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null,
      whatsapp_phone_number_id || null, whatsapp_access_token || null,
      !!bot_paused, !!pause_schedule_enabled, JSON.stringify(pause_schedule || {}),
-     !!pickup_enabled, pickup_address || null, !!delivery_enabled, delivery_rules || null, business.id]
+     !!pickup_enabled, pickup_address || null, !!delivery_enabled, delivery_rules || null,
+     low_stock_threshold === "" || low_stock_threshold === undefined || low_stock_threshold === null ? null : Number(low_stock_threshold),
+     business.id]
   );
   res.json({ saved: true });
 });
@@ -469,10 +555,10 @@ app.post("/api/business/:slug/menu-items", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
 
-  const { name, price, category } = req.body;
+  const { name, price, category, stock } = req.body;
   const { rows } = await pool.query(
-    "insert into menu_items (business_id, name, price, category) values ($1,$2,$3,$4) returning *",
-    [business.id, name, price, category || null]
+    "insert into menu_items (business_id, name, price, category, stock) values ($1,$2,$3,$4,$5) returning *",
+    [business.id, name, price, category || null, stock === "" || stock === undefined ? null : Number(stock)]
   );
   res.json(rows[0]);
 });
@@ -481,10 +567,10 @@ app.put("/api/business/:slug/menu-items/:itemId", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
 
-  const { name, price, category, active } = req.body;
+  const { name, price, category, active, stock } = req.body;
   const { rows } = await pool.query(
-    "update menu_items set name=$1, price=$2, category=$3, active=$4 where id=$5 and business_id=$6 returning *",
-    [name, price, category || null, active, req.params.itemId, business.id]
+    "update menu_items set name=$1, price=$2, category=$3, active=$4, stock=$5 where id=$6 and business_id=$7 returning *",
+    [name, price, category || null, active, stock === "" || stock === undefined || stock === null ? null : Number(stock), req.params.itemId, business.id]
   );
   res.json(rows[0]);
 });
@@ -877,6 +963,24 @@ app.post("/api/business/:slug/orders/:orderId/remind", async (req, res) => {
   }
 });
 
+// Productos activos con stock trackeado que cayeron bajo el umbral que configuró el negocio.
+app.get("/api/business/:slug/low-stock", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  if (business.low_stock_threshold === null || business.low_stock_threshold === undefined) {
+    return res.json([]);
+  }
+
+  const { rows } = await pool.query(
+    `select id, name, stock from menu_items
+     where business_id = $1 and active = true and stock is not null and stock <= $2
+     order by stock asc, name asc`,
+    [business.id, business.low_stock_threshold]
+  );
+  res.json(rows);
+});
+
 // Lista los clientes que le han escrito a este negocio, con su última actividad,
 // para la pestaña "Clientes" del panel.
 app.get("/api/business/:slug/customers", async (req, res) => {
@@ -956,6 +1060,7 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
   syncOrderToSheetSafe(row, rows[0]);
 
   if (status === "pago_verificado" && row.previous_status !== "pago_verificado") {
+    decrementStockForOrder(rows[0]).catch((e) => console.error("Error descontando stock:", e));
     notifyPaymentVerified(row, row.conversation_id).catch((e) =>
       console.error("Error avisándole al cliente que su pago fue verificado:", e)
     );
@@ -1026,6 +1131,9 @@ app.all("/api/webpay/return", async (req, res) => {
       approved ? "pago_verificado" : "cancelado",
       order.id,
     ]);
+    if (approved && order.status !== "pago_verificado") {
+      decrementStockForOrder(order).catch((e) => console.error("Error descontando stock:", e));
+    }
     res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif; text-align:center; padding:60px 20px;">
       <h2>${approved ? "¡Pago exitoso!" : "El pago no se pudo completar"}</h2>
       <p>${approved ? "Ya puedes cerrar esta ventana y volver al chat." : "Puedes volver al chat e intentarlo de nuevo."}</p>

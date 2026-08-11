@@ -42,6 +42,7 @@
   .item-row .name { flex: 2; }
   .item-row .price { flex: 1; width: 90px; }
   .item-row .category { flex: 1; }
+  .item-row .stock { flex: 1; width: 70px; }
   .item-row .active-toggle { flex-shrink: 0; }
   .item-row .del { flex-shrink: 0; background: var(--gray); color: var(--muted); }
   .item-photo { flex-shrink: 0; cursor: pointer; }
@@ -66,10 +67,10 @@
   .msg-time.time-user { align-self: flex-end; }
   .msg-time.time-assistant { align-self: flex-start; }
 
-  #login { max-width: 320px; margin: 0 auto; padding-top: 90px; text-align: center; }
+  #login, #forgotPassword { max-width: 320px; margin: 0 auto; padding-top: 90px; text-align: center; }
   #login .tagline { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 22px; margin-bottom: 26px; }
-  #login input { margin: 10px 0; border-radius: 10px; padding: 12px 14px; }
-  #login button { width: 100%; padding: 12px; border-radius: 10px; font-size: 14px; }
+  #login input, #forgotPassword input { margin: 10px 0; border-radius: 10px; padding: 12px 14px; }
+  #login button, #forgotPassword button { width: 100%; padding: 12px; border-radius: 10px; font-size: 14px; }
 
   header { display: flex; justify-content: space-between; align-items: center; padding: 28px 0 18px; }
   .biz-sub { font-size: 12.5px; color: var(--muted); }
@@ -90,6 +91,16 @@
   <input id="password" type="password" placeholder="Clave del negocio" onkeydown="if(event.key==='Enter') tryLogin()" />
   <button onclick="tryLogin()">Entrar</button>
   <div id="loginError" style="color:#E64F3F; font-size:13px; margin-top:8px;"></div>
+  <div style="margin-top:14px;"><a href="#" onclick="showForgotPassword(); return false;" style="font-size:12.5px; color:var(--muted); text-decoration:underline;">¿Olvidaste tu clave?</a></div>
+</div>
+
+<div id="forgotPassword" style="display:none;">
+  <img style="height:40px; margin-bottom:26px;" alt="Pont" src="" id="forgotLogo" />
+  <p style="font-size:13px; color:var(--muted); margin:0 0 14px;">Escribe el correo con el que registraste tu negocio y te mandamos un link para elegir una clave nueva.</p>
+  <input id="forgotEmail" type="email" placeholder="tu@correo.cl" onkeydown="if(event.key==='Enter') submitForgotPassword()" />
+  <button onclick="submitForgotPassword()">Enviar link</button>
+  <div id="forgotMsg" style="font-size:13px; margin-top:8px;"></div>
+  <div style="margin-top:14px;"><a href="#" onclick="showLogin(); return false;" style="font-size:12.5px; color:var(--muted); text-decoration:underline;">Volver a entrar con clave</a></div>
 </div>
 
 <div id="app" style="display:none;">
@@ -182,6 +193,14 @@
     </div>
 
     <div class="card">
+      <h2>Alerta de stock bajo</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Avísame en el panel cuando a algún producto (con stock activado en Catálogo) le queden pocas unidades. Déjalo vacío para desactivar el aviso.</p>
+      <label>Avisarme cuando queden menos de</label>
+      <input id="lowStockThreshold" type="number" min="0" placeholder="Ej: 5" style="max-width:120px;" />
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
+    </div>
+
+    <div class="card">
       <h2>Modo pausa (para atender tú mismo por WhatsApp)</h2>
       <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
         <input type="checkbox" id="botPaused" style="width:auto;" /> Pausar el bot ahora mismo (yo voy a contestar a mano)
@@ -265,6 +284,12 @@
 
   <!-- CATÁLOGO -->
   <div class="tab-panel" id="panelCatalogo">
+    <div class="card" id="lowStockCard" style="display:none; border:1.5px solid var(--coral);">
+      <h2>Stock bajo</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Productos que están por agotarse. Configura el umbral en Configuración.</p>
+      <div id="lowStockList"></div>
+    </div>
+
     <div class="card">
       <h2>Entrega</h2>
       <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Activa las formas de entrega que ofreces. El agente solo le va a ofrecer al cliente las que actives acá.</p>
@@ -402,6 +427,7 @@
       if (biz.logoData) {
         document.getElementById("loginLogo").src = biz.logoData;
         document.getElementById("headerLogo").src = biz.logoData;
+        document.getElementById("forgotLogo").src = biz.logoData;
       }
     })
     .catch(() => {});
@@ -630,6 +656,31 @@
     if (tab === "clientes") loadCustomers();
   }
 
+  function showForgotPassword() {
+    document.getElementById("login").style.display = "none";
+    document.getElementById("forgotPassword").style.display = "block";
+  }
+
+  function showLogin() {
+    document.getElementById("forgotPassword").style.display = "none";
+    document.getElementById("login").style.display = "block";
+  }
+
+  async function submitForgotPassword() {
+    const email = document.getElementById("forgotEmail").value.trim();
+    const msg = document.getElementById("forgotMsg");
+    if (!email) return;
+    msg.style.color = "var(--muted)";
+    msg.textContent = "Enviando…";
+    await fetch(`${BACKEND_URL}/api/business/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    msg.style.color = "#1E7B34";
+    msg.textContent = "Si existe una cuenta con ese correo, te mandamos un link para cambiar la clave. Revisa tu bandeja (y spam).";
+  }
+
   async function tryLogin() {
     setKey(document.getElementById("password").value);
     const ok = await loadAll();
@@ -646,7 +697,21 @@
     if (!okSettings) return false;
     await loadOrders();
     await loadAbandoned();
+    await loadLowStock();
     return true;
+  }
+
+  async function loadLowStock() {
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/low-stock`, { headers: authHeaders() });
+    const items = await res.json();
+    const card = document.getElementById("lowStockCard");
+    if (!items.length) { card.style.display = "none"; return; }
+    card.style.display = "block";
+    document.getElementById("lowStockList").innerHTML = items.map((it) => `
+      <div class="order-row" style="padding:6px 0; border-bottom:1px solid var(--gray);">
+        <div style="font-size:13.5px; color:var(--navy);">${escapeHtml(it.name)}</div>
+        <div style="font-weight:700; color:var(--coral);">${it.stock} unidades</div>
+      </div>`).join("");
   }
 
   async function loadAbandoned() {
@@ -868,6 +933,7 @@
       }
       document.getElementById("botPaused").checked = !!data.bot_paused;
       document.getElementById("pauseScheduleEnabled").checked = !!data.pause_schedule_enabled;
+      document.getElementById("lowStockThreshold").value = data.low_stock_threshold === null || data.low_stock_threshold === undefined ? "" : data.low_stock_threshold;
       document.getElementById("pickupEnabled").checked = data.pickup_enabled !== false;
       document.getElementById("pickupAddress").value = data.pickup_address || "";
       document.getElementById("deliveryEnabled").checked = data.delivery_enabled !== false;
@@ -906,6 +972,7 @@
         pickup_address: document.getElementById("pickupAddress").value,
         delivery_enabled: document.getElementById("deliveryEnabled").checked,
         delivery_rules: document.getElementById("deliveryRules").value,
+        low_stock_threshold: document.getElementById("lowStockThreshold").value,
       }),
     });
     const row = event && event.target ? event.target.closest(".save-row") : null;
@@ -932,6 +999,7 @@
         <input class="name" value="${(it.name || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="name" />
         <input class="price" type="number" value="${it.price}" onchange="updateItem('${it.id}', this)" data-field="price" />
         <input class="category" value="${(it.category || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="category" />
+        <input class="stock" type="number" min="0" placeholder="Sin límite" title="Stock (vacío = sin trackear)" value="${it.stock === null || it.stock === undefined ? "" : it.stock}" onchange="updateItem('${it.id}', this)" data-field="stock" />
         <label class="active-toggle" style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" style="width:auto;" ${it.active ? "checked" : ""} onchange="updateItem('${it.id}', this)" data-field="active" /> activo
         </label>
@@ -944,10 +1012,13 @@
     const item = currentItems.find((i) => i.id === id);
     if (!item) return;
     const field = changedEl.dataset.field;
-    item[field] = field === "active" ? changedEl.checked : (field === "price" ? Number(changedEl.value) : changedEl.value);
+    if (field === "active") item[field] = changedEl.checked;
+    else if (field === "price") item[field] = Number(changedEl.value);
+    else if (field === "stock") item[field] = changedEl.value === "" ? null : Number(changedEl.value);
+    else item[field] = changedEl.value;
     await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${id}`, {
       method: "PUT", headers: authHeaders(),
-      body: JSON.stringify({ name: item.name, price: item.price, category: item.category, active: item.active }),
+      body: JSON.stringify({ name: item.name, price: item.price, category: item.category, active: item.active, stock: item.stock }),
     });
   }
 
