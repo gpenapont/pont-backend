@@ -45,18 +45,20 @@
     <h1>Crea tu cuenta en TeVende</h1>
     <p class="sub">En un minuto tienes tu agente de pedidos listo.</p>
 
-    <label>Nombre de tu negocio</label>
-    <input id="bizName" placeholder="Ej: Sánguches Ñuñoa" />
+    <form id="signupForm" onsubmit="event.preventDefault(); createBusiness();">
+      <label>Nombre de tu negocio</label>
+      <input id="bizName" placeholder="Ej: Sánguches Ñuñoa" />
 
-    <label>Tu correo</label>
-    <input id="bizEmail" type="email" placeholder="tu@correo.cl" />
+      <label>Tu correo</label>
+      <input id="bizEmail" type="email" name="username" autocomplete="username" placeholder="tu@correo.cl" />
 
-    <label>Elige una clave para tu panel</label>
-    <input id="bizPassword" type="password" placeholder="La vas a usar para entrar a TeVende" />
+      <label>Elige una clave para tu panel</label>
+      <input id="bizPassword" type="password" name="new-password" autocomplete="new-password" placeholder="La vas a usar para entrar a TeVende" />
 
-    <div class="g-recaptcha" id="recaptchaBox" data-sitekey="6Lfc534tAAAAAF4SrxadQFtp7DQV2I-j8jDh-eiy"></div>
+      <div class="g-recaptcha" id="recaptchaBox" data-sitekey="6Lfc534tAAAAAF4SrxadQFtp7DQV2I-j8jDh-eiy"></div>
 
-    <button id="submitBtn" onclick="createBusiness()">Crear mi cuenta</button>
+      <button id="submitBtn" type="submit">Crear mi cuenta</button>
+    </form>
     <div id="error"></div>
   </div>
 

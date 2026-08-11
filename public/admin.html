@@ -79,6 +79,8 @@
       const ventasUrl = `${SITE_URL}/ventas.html?negocio=${b.slug}&admin_key=${encodeURIComponent(getKey() || "")}`;
       const status = b.subscription_status || "inactive";
       const dateVal = b.last_payment_date ? new Date(b.last_payment_date).toISOString().slice(0, 10) : "";
+      const todayVal = new Date().toISOString().slice(0, 10);
+      const overdue = dateVal && dateVal < todayVal;
       const invoiceStatus = b.invoice_status === "emitida" ? "emitida" : "pendiente";
       return `
         <tr>
@@ -89,7 +91,7 @@
           </td>
           <td><span class="status st-${status}">${STATUS_LABEL[status] || status}</span></td>
           <td style="font-size:12px;">${b.subscription_billing_name || "<span style=\"color:var(--muted);\">—</span>"}${b.subscription_billing_rut ? `<br/><span style="color:var(--muted);">${b.subscription_billing_rut}</span>` : ""}${b.email ? `<br/><span style="color:var(--muted);">${b.email}</span>` : ""}</td>
-          <td><input type="date" value="${dateVal}" onchange="updatePaymentDate('${b.slug}', this.value)" /></td>
+          <td><input type="date" value="${dateVal}" style="${overdue ? "color:#C0392B; font-weight:700;" : ""}" onchange="updatePaymentDate('${b.slug}', this.value); markOverdue(this);" /></td>
           <td>
             <select class="invoice-select invoice-${invoiceStatus}" onchange="updateInvoiceStatus('${b.slug}', this.value, this)">
               <option value="pendiente" ${invoiceStatus === "pendiente" ? "selected" : ""}>Boleta/Factura pendiente</option>
@@ -99,6 +101,12 @@
           <td><button class="small-btn" style="background:var(--muted);" onclick="deleteBusiness('${b.slug}')">Eliminar</button></td>
         </tr>`;
     }).join("");
+  }
+
+  function markOverdue(input) {
+    const overdue = input.value && input.value < new Date().toISOString().slice(0, 10);
+    input.style.color = overdue ? "#C0392B" : "";
+    input.style.fontWeight = overdue ? "700" : "normal";
   }
 
   async function updatePaymentDate(slug, value) {

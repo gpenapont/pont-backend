@@ -90,8 +90,11 @@
 
 <div id="login">
   <img id="loginLogo" style="height:40px; margin-bottom:26px;" alt="Pont" />
-  <input id="password" type="password" placeholder="Clave del negocio" onkeydown="if(event.key==='Enter') tryLogin()" />
-  <button onclick="tryLogin()">Entrar</button>
+  <form id="loginForm" onsubmit="event.preventDefault(); tryLogin();">
+    <input id="loginUsername" type="text" name="username" autocomplete="username" style="display:none;" />
+    <input id="password" type="password" name="password" autocomplete="current-password" placeholder="Clave del negocio" />
+    <button type="submit">Entrar</button>
+  </form>
   <div id="loginError" style="color:#E64F3F; font-size:13px; margin-top:8px;"></div>
   <div style="margin-top:14px;"><a href="#" onclick="showForgotPassword(); return false;" style="font-size:12.5px; color:var(--muted); text-decoration:underline;">¿Olvidaste tu clave?</a></div>
 </div>
@@ -408,6 +411,7 @@
   // usa este valor fijo como respaldo (para que los sitios ya desplegados sigan funcionando).
   const BACKEND_URL = "https://pont-backend-production.up.railway.app";
   const BUSINESS_SLUG = new URLSearchParams(window.location.search).get("negocio") || "sodastream";
+  document.getElementById("loginUsername").value = BUSINESS_SLUG;
   const GOOGLE_CLIENT_ID = "40303689859-s37f3b57m4sv6ddbhflii0vsemtui575.apps.googleusercontent.com";
   const FACEBOOK_APP_ID = "tu-facebook-app-id";
   const FACEBOOK_CONFIG_ID = "tu-config-id-de-embedded-signup";
