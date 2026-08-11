@@ -163,7 +163,7 @@
       <label>Lo primero que ve el cliente al abrir el chat</label>
       <input id="greeting" />
       <div class="save-row">
-        <button onclick="saveSettings()">Guardar</button>
+        <button onclick="saveSettings(event)">Guardar</button>
         <span class="saved-msg" id="savedMsg">Guardado ✓</span>
       </div>
     </div>
@@ -175,7 +175,7 @@
         💡 Tip: pídele a ChatGPT (u otro asistente de IA) que te redacte el contexto de tu negocio para un agente de ventas, y pega el resultado aquí.
       </p>
       <textarea id="systemPromptExtra" rows="8"></textarea>
-      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
     </div>
 
     <div class="card">
@@ -187,7 +187,7 @@
         <input type="checkbox" id="pauseScheduleEnabled" style="width:auto;" /> Activar horario semanal de pausa
       </label>
       <div id="scheduleRows" style="margin-top:10px;"></div>
-      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
     </div>
 
     <div class="card">
@@ -204,7 +204,7 @@
         <input id="whatsappPhoneId" placeholder="Se completa al conectar el número en Meta" />
         <label>Token de acceso</label>
         <input id="whatsappAccessToken" placeholder="Token de acceso de la app de Meta" />
-        <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+        <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
       </details>
     </div>
 
@@ -217,7 +217,7 @@
       <input id="webpayCommerceCode" placeholder="Se completa cuando tengas la aprobación de Transbank" />
       <label>API Key de comercio</label>
       <input id="webpayApiKey" placeholder="Se completa cuando tengas la aprobación de Transbank" />
-      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
     </div>
 
     <div class="card">
@@ -244,11 +244,19 @@
         <option>China Construction Bank</option>
         <option>Bank of China</option>
       </select>
-      <label>Tipo de cuenta</label><input id="bankAccountType" />
+      <label>Tipo de cuenta</label>
+      <select id="bankAccountType">
+        <option value="">Selecciona un tipo de cuenta</option>
+        <option>Cuenta Corriente</option>
+        <option>Cuenta Vista</option>
+        <option>Cuenta de Ahorro</option>
+        <option>Cuenta RUT</option>
+        <option>Chequera Electrónica</option>
+      </select>
       <label>N° de cuenta</label><input id="bankAccountNumber" />
       <label>RUT</label><input id="bankRut" />
       <label>Correo para comprobantes</label><input id="bankEmail" />
-      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
     </div>
   </div>
 
@@ -270,7 +278,7 @@
       <label>Reglas de despacho a domicilio</label>
       <textarea id="deliveryRules" rows="4" placeholder="Ej: Despacho $2.500 dentro de Providencia y Ñuñoa, pedido mínimo $10.000. Fuera de esas comunas se cotiza aparte."></textarea>
 
-      <div class="save-row"><button onclick="saveSettings()">Guardar</button></div>
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
     </div>
 
     <div class="card">
@@ -826,7 +834,7 @@
     }
   }
 
-  async function saveSettings() {
+  async function saveSettings(event) {
     await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/settings`, {
       method: "PUT",
       headers: authHeaders(),
@@ -852,7 +860,15 @@
         delivery_rules: document.getElementById("deliveryRules").value,
       }),
     });
-    const msg = document.getElementById("savedMsg");
+    const row = event && event.target ? event.target.closest(".save-row") : null;
+    if (!row) return;
+    let msg = row.querySelector(".saved-msg");
+    if (!msg) {
+      msg = document.createElement("span");
+      msg.className = "saved-msg";
+      msg.textContent = "Guardado ✓";
+      row.appendChild(msg);
+    }
     msg.classList.add("show");
     setTimeout(() => msg.classList.remove("show"), 1800);
   }

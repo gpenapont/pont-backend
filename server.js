@@ -748,7 +748,8 @@ app.get("/api/business/:slug/orders", async (req, res) => {
   ]);
   const biz = bizRows[0];
   if (!biz) return res.status(404).json({ error: "Negocio no encontrado" });
-  if (biz.dashboard_password && req.headers["x-dashboard-key"] !== biz.dashboard_password) {
+  const isAdminOrders = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
+  if (biz.dashboard_password && req.headers["x-dashboard-key"] !== biz.dashboard_password && !isAdminOrders) {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
@@ -828,7 +829,8 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
   );
   const row = orderRows[0];
   if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
-  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password) {
+  const isAdminStatus = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
+  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password && !isAdminStatus) {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
@@ -848,7 +850,8 @@ app.delete("/api/orders/:orderId", async (req, res) => {
   );
   const row = orderRows[0];
   if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
-  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password) {
+  const isAdminDelete = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
+  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password && !isAdminDelete) {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
@@ -1055,6 +1058,10 @@ app.get("/api/google/callback", async (req, res) => {
       }),
     });
     const sheet = await createRes.json();
+    if (!createRes.ok || !sheet.spreadsheetId) {
+      console.error("Error creando la planilla de Google Sheets:", sheet);
+      return res.redirect(`${redirectBase}&google=error`);
+    }
     await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${sheet.spreadsheetId}/values/Pedidos!A1:G1?valueInputOption=USER_ENTERED`,
       {
