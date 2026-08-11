@@ -1529,12 +1529,17 @@ function checkAdminAuth(req, res) {
 // Lista todos los negocios con sus links listos, para el panel de administrador (solo tú).
 app.get("/api/admin/businesses", async (req, res) => {
   if (!checkAdminAuth(req, res)) return;
-  const { rows } = await pool.query(
-    `select slug, name, email, subscription_status, last_payment_date, invoice_status, created_at,
-     subscription_billing_name, subscription_billing_rut
-     from businesses order by created_at desc`
-  );
-  res.json({ businesses: rows });
+  try {
+    const { rows } = await pool.query(
+      `select slug, name, email, subscription_status, last_payment_date, invoice_status, created_at,
+       subscription_billing_name, subscription_billing_rut
+       from businesses order by created_at desc`
+    );
+    res.json({ businesses: rows });
+  } catch (e) {
+    console.error("Error listando negocios para el panel de admin:", e);
+    res.status(500).json({ error: "Error interno" });
+  }
 });
 
 // Cambia a mano la fecha de último pago de un negocio (por ejemplo, si te pagó por transferencia).
