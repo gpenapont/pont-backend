@@ -853,6 +853,30 @@ app.get("/api/business/:slug/abandoned-orders", async (req, res) => {
   res.json(rows);
 });
 
+// El negocio le manda un recordatorio a un cliente que dejó un carrito abandonado.
+app.post("/api/business/:slug/orders/:orderId/remind", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { rows } = await pool.query("select * from orders where id = $1 and business_id = $2", [
+    req.params.orderId,
+    business.id,
+  ]);
+  const order = rows[0];
+  if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+
+  const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
+  const text = `¡Hola! Vimos que dejaste tu pedido a medio armar${items ? ` (${items})` : ""}. ¿Seguimos? Escríbeme cuando quieras retomarlo.`;
+
+  try {
+    await sendCustomerMessage(business, order.conversation_id, text);
+    res.json({ sent: true });
+  } catch (e) {
+    console.error("Error enviando recordatorio de carrito abandonado:", e);
+    res.status(500).json({ error: "No se pudo enviar el recordatorio" });
+  }
+});
+
 // Lista los clientes que le han escrito a este negocio, con su última actividad,
 // para la pestaña "Clientes" del panel.
 app.get("/api/business/:slug/customers", async (req, res) => {
@@ -1057,9 +1081,11 @@ async function sendWhatsappImage(business, to, imageUrl) {
 
 // Le avisa al cliente que su pago quedó verificado: queda guardado en el historial del chat
 // (lo ve si vuelve a abrir el chat web) y, si escribió por WhatsApp, se lo mandamos también ahí.
-async function notifyPaymentVerified(business, conversationId) {
+// Manda un mensaje del asistente a un cliente fuera del flujo normal de chat (por ejemplo,
+// un aviso o un recordatorio disparado desde el panel): queda guardado en el historial (lo ve
+// si vuelve a abrir el chat web) y, si escribió por WhatsApp, se lo mandamos también por ahí.
+async function sendCustomerMessage(business, conversationId, text) {
   if (!conversationId) return;
-  const text = "¡Buenas noticias! Confirmamos que recibimos tu pago. Ya estamos preparando tu pedido.";
 
   await pool.query("insert into messages (conversation_id, role, content) values ($1, 'assistant', $2)", [
     conversationId,
@@ -1071,6 +1097,10 @@ async function notifyPaymentVerified(business, conversationId) {
   if (sessionId && sessionId.startsWith("whatsapp-") && business.whatsapp_phone_number_id && business.whatsapp_access_token) {
     await sendWhatsappMessage(business, sessionId.slice("whatsapp-".length), text);
   }
+}
+
+async function notifyPaymentVerified(business, conversationId) {
+  await sendCustomerMessage(business, conversationId, "¡Buenas noticias! Confirmamos que recibimos tu pago. Ya estamos preparando tu pedido.");
 }
 
 // Decide si el bot debe quedarse callado en este momento (para que el negocio conteste a mano
@@ -1448,6 +1478,42 @@ async function cancelarPedidosVencidos() {
 }
 setInterval(cancelarPedidosVencidos, 30 * 60 * 1000);
 cancelarPedidosVencidos();
+
+// Los carritos abandonados (pedido armado, nunca confirmado) se eliminan solos después de 24
+// horas sin actividad del cliente, y le queda un mensaje en la conversación explicando qué pasó.
+const CARRITO_ABANDONADO_LIMITE_HORAS = 24;
+async function eliminarCarritosAbandonados() {
+  try {
+    const { rows: candidates } = await pool.query(
+      `select o.id, o.business_id, o.conversation_id
+       from orders o
+       join conversations conv on conv.id = o.conversation_id
+       left join messages m on m.conversation_id = conv.id
+       where o.status = 'draft' and o.items::text <> '[]'
+       group by o.id
+       having max(m.created_at) < now() - interval '1 hour' * $1`,
+      [CARRITO_ABANDONADO_LIMITE_HORAS]
+    );
+
+    for (const c of candidates) {
+      const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [c.business_id]);
+      const business = bizRows[0];
+      if (!business) continue;
+
+      const { rows: updated } = await pool.query("update orders set status = 'eliminado' where id = $1 returning *", [c.id]);
+      await sendCustomerMessage(
+        business,
+        c.conversation_id,
+        "Este pedido se eliminó automáticamente porque no se confirmó dentro de las 24 horas. Si todavía quieres hacerlo, dime y lo armamos de nuevo."
+      );
+      syncOrderToSheetSafe(business, updated[0]);
+    }
+  } catch (e) {
+    console.error("Error eliminando carritos abandonados:", e);
+  }
+}
+setInterval(eliminarCarritosAbandonados, 30 * 60 * 1000);
+eliminarCarritosAbandonados();
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

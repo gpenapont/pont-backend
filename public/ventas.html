@@ -665,8 +665,24 @@
             <div class="order-total">${fmt(o.total)}</div>
             <div class="order-meta">Última actividad: ${new Date(o.last_message_at).toLocaleString("es-CL")}</div>
           </div>
+          <button class="small" id="remind-${o.id}" onclick="remindAbandoned('${o.id}')">Enviar recordatorio</button>
         </div>`;
     }).join("");
+  }
+
+  async function remindAbandoned(orderId) {
+    const btn = document.getElementById(`remind-${orderId}`);
+    btn.disabled = true;
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/orders/${orderId}/remind`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    if (res.ok) {
+      btn.textContent = "Recordatorio enviado ✓";
+    } else {
+      btn.textContent = "No se pudo enviar";
+      btn.disabled = false;
+    }
   }
 
   // ---- Pedidos ----
