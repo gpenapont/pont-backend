@@ -171,6 +171,13 @@
 </div>
 
 <script>
+  // Si alguien entra a la raíz del sitio sin especificar negocio (?negocio=slug), no tiene
+  // sentido mostrarle el chat de un negocio al azar — lo mandamos a la página de inicio,
+  // que explica qué es TeVende y cómo crear una cuenta.
+  if (!new URLSearchParams(window.location.search).get("negocio")) {
+    window.location.replace("/inicio.html");
+  }
+
   // Para sitios nuevos: el negocio se identifica por la URL (?negocio=slug), así un solo
   // sitio sirve a todos los negocios. Si no viene en la URL, usa este valor fijo como respaldo
   // (así los sitios ya desplegados por negocio siguen funcionando igual que siempre).
