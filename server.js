@@ -654,8 +654,9 @@ app.put("/api/business/:slug/menu-items/bulk", async (req, res) => {
 
   // Todo o nada: si un producto falla al insertarse a mitad de camino, no queremos terminar
   // con el catálogo ya borrado y solo la mitad de los productos nuevos cargados.
-  const client = await pool.connect();
+  let client;
   try {
+    client = await pool.connect();
     await client.query("begin");
     await client.query("delete from menu_items where business_id = $1", [business.id]);
     for (const item of items) {
@@ -669,11 +670,17 @@ app.put("/api/business/:slug/menu-items/bulk", async (req, res) => {
     await client.query("commit");
     res.json({ replaced: items.length });
   } catch (e) {
-    await client.query("rollback");
     console.error("Error reemplazando el catálogo:", e);
+    if (client) {
+      try {
+        await client.query("rollback");
+      } catch (rollbackErr) {
+        console.error("Error además al hacer rollback:", rollbackErr);
+      }
+    }
     res.status(500).json({ error: "No se pudo reemplazar el catálogo. Tu catálogo anterior sigue intacto." });
   } finally {
-    client.release();
+    if (client) client.release();
   }
 });
 

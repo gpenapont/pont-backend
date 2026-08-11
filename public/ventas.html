@@ -1099,19 +1099,25 @@
     if (!text) { alert("Pega tu catálogo primero."); return; }
     if (!confirm("Esto va a borrar tu catálogo actual y reemplazarlo por el que pegaste. ¿Seguro que quieres continuar?")) return;
 
-    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/bulk`, {
-      method: "PUT",
-      headers: authHeaders(),
-      body: JSON.stringify({ text }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      alert(data.error || "No se pudo reemplazar el catálogo.");
-      return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/bulk`, {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify({ text }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (e) { /* respuesta sin JSON válido, seguimos con data vacío */ }
+      if (!res.ok) {
+        alert(data.error || `No se pudo reemplazar el catálogo (error ${res.status}).`);
+        return;
+      }
+      alert(`Listo, se cargaron ${data.replaced} productos.`);
+      document.getElementById("bulkCatalog").value = "";
+      loadSettings();
+    } catch (e) {
+      console.error("Error de red reemplazando el catálogo:", e);
+      alert("No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.");
     }
-    alert(`Listo, se cargaron ${data.replaced} productos.`);
-    document.getElementById("bulkCatalog").value = "";
-    loadSettings();
   }
 
   async function addItem() {
