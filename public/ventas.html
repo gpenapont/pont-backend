@@ -945,11 +945,15 @@
     }
     const reader = new FileReader();
     reader.onload = async () => {
-      await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${id}/image`, {
+      const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${id}/image`, {
         method: "PUT",
         headers: authHeaders(),
         body: JSON.stringify({ image_data: reader.result }),
       });
+      if (!res.ok) {
+        alert("No se pudo guardar la foto. Intenta de nuevo.");
+        return;
+      }
       const item = currentItems.find((i) => i.id === id);
       if (item) item.has_image = true;
       renderItems();

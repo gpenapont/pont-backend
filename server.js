@@ -503,28 +503,38 @@ app.put("/api/business/:slug/menu-items/:itemId/image", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
   const { image_data } = req.body;
-  await pool.query("update menu_items set image_data=$1 where id=$2 and business_id=$3", [
-    image_data || null,
-    req.params.itemId,
-    business.id,
-  ]);
-  res.json({ saved: true });
+  try {
+    await pool.query("update menu_items set image_data=$1 where id=$2 and business_id=$3", [
+      image_data || null,
+      req.params.itemId,
+      business.id,
+    ]);
+    res.json({ saved: true });
+  } catch (e) {
+    console.error("Error guardando la foto del producto:", e);
+    res.status(500).json({ error: "No se pudo guardar la foto" });
+  }
 });
 
 // Sirve la foto del producto en crudo (sin auth: la necesitan tanto el chat web público
 // como los servidores de WhatsApp para descargarla al mandarla como imagen nativa).
 app.get("/api/business/:slug/menu-items/:itemId/image", async (req, res) => {
-  const { rows } = await pool.query(
-    `select mi.image_data from menu_items mi join businesses b on b.id = mi.business_id
-     where b.slug = $1 and mi.id = $2`,
-    [req.params.slug, req.params.itemId]
-  );
-  const imageData = rows[0] && rows[0].image_data;
-  const match = imageData && imageData.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-  if (!match) return res.status(404).send("Sin imagen");
-  res.set("Content-Type", match[1]);
-  res.set("Cache-Control", "public, max-age=3600");
-  res.send(Buffer.from(match[2], "base64"));
+  try {
+    const { rows } = await pool.query(
+      `select mi.image_data from menu_items mi join businesses b on b.id = mi.business_id
+       where b.slug = $1 and mi.id = $2`,
+      [req.params.slug, req.params.itemId]
+    );
+    const imageData = rows[0] && rows[0].image_data;
+    const match = imageData && imageData.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) return res.status(404).send("Sin imagen");
+    res.set("Content-Type", match[1]);
+    res.set("Cache-Control", "public, max-age=3600");
+    res.send(Buffer.from(match[2], "base64"));
+  } catch (e) {
+    console.error("Error sirviendo la foto del producto:", e);
+    res.status(500).send("Error interno");
+  }
 });
 
 // Interpreta texto pegado con un producto por línea: "Nombre, Precio, Categoría" o el mismo
