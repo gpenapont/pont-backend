@@ -337,10 +337,13 @@
       </div>
       <div id="itemsList"></div>
       <div class="item-row" style="margin-top:10px;">
-        <input class="name" id="newName" placeholder="Nombre del producto" />
-        <input class="price" id="newPrice" type="number" placeholder="Precio" />
-        <input class="category" id="newCategory" placeholder="Categoría" />
-        <button class="small" onclick="addItem()">Agregar</button>
+        <div class="item-field" style="width:34px; flex-shrink:0;"></div>
+        <div class="item-field name-field"><input class="name" id="newName" placeholder="Nombre del producto" /></div>
+        <div class="item-field price-field"><input class="price" id="newPrice" type="number" placeholder="Precio" /></div>
+        <div class="item-field category-field"><input class="category" id="newCategory" placeholder="Categoría" /></div>
+        <div class="item-field stock-field"></div>
+        <span style="flex-shrink:0; width:50px;"></span>
+        <button class="small" style="flex-shrink:0;" onclick="addItem()">Agregar</button>
       </div>
     </div>
   </div>
