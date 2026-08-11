@@ -759,6 +759,44 @@ app.get("/api/business/:slug/orders", async (req, res) => {
   res.json(rows);
 });
 
+// Lista los clientes que le han escrito a este negocio, con su última actividad,
+// para la pestaña "Clientes" del panel.
+app.get("/api/business/:slug/customers", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { rows } = await pool.query(
+    `select c.session_id, c.name, c.last_address, c.created_at,
+            max(m.created_at) as last_message_at, count(m.id) as message_count
+     from customers c
+     left join conversations conv on conv.business_id = c.business_id and conv.session_id = c.session_id
+     left join messages m on m.conversation_id = conv.id
+     where c.business_id = $1
+     group by c.session_id, c.name, c.last_address, c.created_at
+     order by last_message_at desc nulls last`,
+    [business.id]
+  );
+  res.json(rows);
+});
+
+// Historial completo (con fecha y hora) de la conversación de un cliente puntual.
+app.get("/api/business/:slug/customers/:sessionId/messages", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { rows: convRows } = await pool.query(
+    "select id from conversations where business_id = $1 and session_id = $2",
+    [business.id, req.params.sessionId]
+  );
+  if (!convRows[0]) return res.json({ messages: [] });
+
+  const { rows: messages } = await pool.query(
+    "select role, content, created_at from messages where conversation_id = $1 order by created_at asc",
+    [convRows[0].id]
+  );
+  res.json({ messages });
+});
+
 // El negocio marca manualmente que verificó la transferencia en su cuenta, o cambia el estado
 // a cualquier otro valor válido. Misma clave.
 app.patch("/api/orders/:orderId/status", async (req, res) => {

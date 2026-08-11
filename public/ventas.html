@@ -50,6 +50,19 @@
   .order-total { font-family: 'Poppins', sans-serif; font-weight: 700; }
   .order-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
+  .customer-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--gray); cursor: pointer; }
+  .customer-row:last-child { border-bottom: none; }
+  .customer-row:hover { background: var(--gray); }
+  .customer-name { font-weight: 700; font-size: 13.5px; color: var(--navy); }
+  .customer-address { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .customer-meta { font-size: 11.5px; color: var(--muted); text-align: right; white-space: nowrap; }
+  .msg-bubble { max-width: 78%; padding: 8px 12px; border-radius: 12px; font-size: 13.5px; margin-bottom: 4px; white-space: pre-wrap; }
+  .msg-user { background: var(--mint); align-self: flex-end; border-bottom-right-radius: 3px; }
+  .msg-assistant { background: var(--gray); align-self: flex-start; border-bottom-left-radius: 3px; }
+  .msg-time { font-size: 10.5px; color: var(--muted); margin: 0 2px 12px; }
+  .msg-time.time-user { align-self: flex-end; }
+  .msg-time.time-assistant { align-self: flex-start; }
+
   #login { max-width: 320px; margin: 0 auto; padding-top: 90px; text-align: center; }
   #login .tagline { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 22px; margin-bottom: 26px; }
   #login input { margin: 10px 0; border-radius: 10px; padding: 12px 14px; }
@@ -88,6 +101,7 @@
     <div class="tab-btn active" id="tabBtnPedidos" onclick="showTab('pedidos')">Pedidos</div>
     <div class="tab-btn" id="tabBtnConfig" onclick="showTab('config')">Configuración</div>
     <div class="tab-btn" id="tabBtnCatalogo" onclick="showTab('catalogo')">Catálogo</div>
+    <div class="tab-btn" id="tabBtnClientes" onclick="showTab('clientes')">Clientes</div>
     <div class="tab-btn" id="tabBtnSuscripcion" onclick="showTab('suscripcion')">Tu suscripción</div>
   </div>
 
@@ -272,6 +286,25 @@
         <input class="category" id="newCategory" placeholder="Categoría" />
         <button class="small" onclick="addItem()">Agregar</button>
       </div>
+    </div>
+  </div>
+
+  <!-- CLIENTES -->
+  <div class="tab-panel" id="panelClientes">
+    <div class="card" id="customersCard">
+      <h2>Clientes</h2>
+      <div id="customersList"></div>
+    </div>
+
+    <div class="card" id="customerChatCard" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+        <div>
+          <h2 style="margin-bottom:2px;" id="customerChatName">Cliente</h2>
+          <div class="customer-address" id="customerChatAddress"></div>
+        </div>
+        <button class="small secondary" onclick="closeCustomerChat()">Volver</button>
+      </div>
+      <div id="customerChatMessages" style="display:flex; flex-direction:column;"></div>
     </div>
   </div>
 
@@ -567,11 +600,14 @@
     document.getElementById("panelPedidos").classList.toggle("active", tab === "pedidos");
     document.getElementById("panelConfig").classList.toggle("active", tab === "config");
     document.getElementById("panelCatalogo").classList.toggle("active", tab === "catalogo");
+    document.getElementById("panelClientes").classList.toggle("active", tab === "clientes");
     document.getElementById("panelSuscripcion").classList.toggle("active", tab === "suscripcion");
     document.getElementById("tabBtnPedidos").classList.toggle("active", tab === "pedidos");
     document.getElementById("tabBtnConfig").classList.toggle("active", tab === "config");
     document.getElementById("tabBtnCatalogo").classList.toggle("active", tab === "catalogo");
+    document.getElementById("tabBtnClientes").classList.toggle("active", tab === "clientes");
     document.getElementById("tabBtnSuscripcion").classList.toggle("active", tab === "suscripcion");
+    if (tab === "clientes") loadCustomers();
   }
 
   async function tryLogin() {
@@ -625,6 +661,76 @@
           </div>
         </div>`;
     }).join("");
+  }
+
+  // ---- Clientes ----
+  // El texto de nombre/dirección/mensajes viene del cliente final (texto libre, incluido por WhatsApp),
+  // así que hay que escaparlo antes de meterlo en el HTML para no abrir un XSS contra el dueño del negocio.
+  function escapeHtml(str) {
+    return String(str || "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  async function loadCustomers() {
+    document.getElementById("customerChatCard").style.display = "none";
+    document.getElementById("customersCard").style.display = "block";
+
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/customers`, { headers: authHeaders() });
+    const customers = await res.json();
+    const list = document.getElementById("customersList");
+    if (!customers.length) {
+      list.innerHTML = '<p style="color:var(--muted); font-size:14px; margin:0;">Todavía no te ha escrito ningún cliente.</p>';
+      return;
+    }
+    list.innerHTML = customers.map((c) => `
+      <div class="customer-row" data-session-id="${escapeHtml(c.session_id)}" data-name="${escapeHtml(c.name || "Cliente sin nombre")}" data-address="${escapeHtml(c.last_address || "")}">
+        <div>
+          <div class="customer-name">${escapeHtml(c.name || "Cliente sin nombre")}</div>
+          ${c.last_address ? `<div class="customer-address">${escapeHtml(c.last_address)}</div>` : ""}
+        </div>
+        <div class="customer-meta">
+          ${c.last_message_at ? new Date(c.last_message_at).toLocaleString("es-CL") : ""}<br/>
+          ${c.message_count || 0} mensaje${c.message_count == 1 ? "" : "s"}
+        </div>
+      </div>`).join("");
+  }
+
+  // Los datos van en data-* (el navegador los decodifica solo), así evitamos tener que
+  // escapar texto libre del cliente dentro de un atributo onclick.
+  document.getElementById("customersList").addEventListener("click", (e) => {
+    const row = e.target.closest(".customer-row");
+    if (!row) return;
+    openCustomerChat(row.dataset.sessionId, row.dataset.name, row.dataset.address);
+  });
+
+  async function openCustomerChat(sessionId, name, address) {
+    document.getElementById("customersCard").style.display = "none";
+    const chatCard = document.getElementById("customerChatCard");
+    chatCard.style.display = "block";
+    document.getElementById("customerChatName").textContent = name;
+    document.getElementById("customerChatAddress").textContent = address || "";
+
+    const box = document.getElementById("customerChatMessages");
+    box.innerHTML = '<p style="color:var(--muted); font-size:13px;">Cargando…</p>';
+
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/customers/${encodeURIComponent(sessionId)}/messages`, { headers: authHeaders() });
+    const data = await res.json();
+    if (!data.messages || !data.messages.length) {
+      box.innerHTML = '<p style="color:var(--muted); font-size:13px;">Sin conversación registrada.</p>';
+      return;
+    }
+    box.innerHTML = data.messages.map((m) => {
+      const who = m.role === "user" ? "user" : "assistant";
+      return `
+        <div class="msg-bubble msg-${who}">${escapeHtml(m.content)}</div>
+        <div class="msg-time time-${who}">${new Date(m.created_at).toLocaleString("es-CL")}</div>`;
+    }).join("");
+  }
+
+  function closeCustomerChat() {
+    document.getElementById("customerChatCard").style.display = "none";
+    document.getElementById("customersCard").style.display = "block";
   }
 
   async function changeStatus(orderId, status) {
