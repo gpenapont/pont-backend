@@ -759,6 +759,27 @@ app.get("/api/business/:slug/orders", async (req, res) => {
   res.json(rows);
 });
 
+// "Carrito abandonado" = el cliente armó un pedido (tiene productos) pero nunca lo confirmó,
+// y lleva un rato sin escribir. Para avisarle al negocio en la pestaña Pedidos.
+const CARRITO_ABANDONADO_MINUTOS = 30;
+app.get("/api/business/:slug/abandoned-orders", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { rows } = await pool.query(
+    `select o.*, max(m.created_at) as last_message_at
+     from orders o
+     join conversations conv on conv.id = o.conversation_id
+     left join messages m on m.conversation_id = conv.id
+     where o.business_id = $1 and o.status = 'draft' and o.items::text <> '[]'
+     group by o.id
+     having max(m.created_at) < now() - interval '1 minute' * $2
+     order by max(m.created_at) desc`,
+    [business.id, CARRITO_ABANDONADO_MINUTOS]
+  );
+  res.json(rows);
+});
+
 // Lista los clientes que le han escrito a este negocio, con su última actividad,
 // para la pestaña "Clientes" del panel.
 app.get("/api/business/:slug/customers", async (req, res) => {

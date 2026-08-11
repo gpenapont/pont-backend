@@ -107,6 +107,12 @@
 
   <!-- PEDIDOS -->
   <div class="tab-panel active" id="panelPedidos">
+    <div class="card" id="abandonedCard" style="display:none; border:1.5px solid var(--coral);">
+      <h2>Carritos abandonados</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Clientes que armaron un pedido pero llevan más de media hora sin confirmarlo.</p>
+      <div id="abandonedList"></div>
+    </div>
+
     <div class="card">
       <h2>Exportar pedidos a Google Sheets</h2>
       <div id="googleNotConnected">
@@ -625,7 +631,28 @@
     const okSettings = await loadSettings();
     if (!okSettings) return false;
     await loadOrders();
+    await loadAbandoned();
     return true;
+  }
+
+  async function loadAbandoned() {
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/abandoned-orders`, { headers: authHeaders() });
+    const orders = await res.json();
+    const card = document.getElementById("abandonedCard");
+    if (!orders.length) { card.style.display = "none"; return; }
+    card.style.display = "block";
+    document.getElementById("abandonedList").innerHTML = orders.map((o) => {
+      const items = (o.items || []).map((it) => `${it.qty}x ${escapeHtml(it.name)}`).join(", ");
+      return `
+        <div class="order-row" style="padding:8px 0; border-bottom:1px solid var(--gray);">
+          <div>
+            <div style="font-weight:700; font-size:13.5px; color:var(--navy);">${escapeHtml(o.customer_name || "Cliente sin nombre")}</div>
+            <div class="order-items">${items}</div>
+            <div class="order-total">${fmt(o.total)}</div>
+            <div class="order-meta">Última actividad: ${new Date(o.last_message_at).toLocaleString("es-CL")}</div>
+          </div>
+        </div>`;
+    }).join("");
   }
 
   // ---- Pedidos ----
