@@ -36,13 +36,15 @@
   .saved-msg { font-size: 12.5px; color: #1E7B34; opacity: 0; transition: opacity .3s; }
   .saved-msg.show { opacity: 1; }
 
-  .item-row { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--gray); }
+  .item-row { display: flex; gap: 8px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--gray); }
   .item-row:last-child { border-bottom: none; }
-  .item-row input { font-size: 13.5px; padding: 6px 9px; }
-  .item-row .name { flex: 2; }
-  .item-row .price { flex: 1; width: 90px; }
-  .item-row .category { flex: 1; }
-  .item-row .stock { flex: 1; width: 70px; }
+  .item-row input { font-size: 13.5px; padding: 6px 9px; width: 100%; }
+  .item-field { display: flex; flex-direction: column; }
+  .field-label { font-size: 10.5px; color: var(--muted); margin-top: 3px; text-align: center; }
+  .item-row .name-field { flex: 2; }
+  .item-row .price-field { flex: 1; width: 90px; }
+  .item-row .category-field { flex: 1; }
+  .item-row .stock-field { flex: 1; width: 70px; }
   .item-row .active-toggle { flex-shrink: 0; }
   .item-row .del { flex-shrink: 0; background: var(--gray); color: var(--muted); }
   .item-photo { flex-shrink: 0; cursor: pointer; }
@@ -992,18 +994,33 @@
     const list = document.getElementById("itemsList");
     list.innerHTML = currentItems.map((it) => `
       <div class="item-row">
-        <label class="item-photo" title="Cambiar foto">
-          ${it.has_image ? `<img src="${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${it.id}/image" />` : `<div class="no-photo"></div>`}
-          <input type="file" accept="image/*" style="display:none;" onchange="uploadItemImage('${it.id}', this)" />
-        </label>
-        <input class="name" value="${(it.name || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="name" />
-        <input class="price" type="number" value="${it.price}" onchange="updateItem('${it.id}', this)" data-field="price" />
-        <input class="category" value="${(it.category || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="category" />
-        <input class="stock" type="number" min="0" placeholder="Sin límite" title="Stock (vacío = sin trackear)" value="${it.stock === null || it.stock === undefined ? "" : it.stock}" onchange="updateItem('${it.id}', this)" data-field="stock" />
-        <label class="active-toggle" style="font-size:12px; display:flex; align-items:center; gap:4px;">
+        <div class="item-field">
+          <label class="item-photo" title="Cambiar foto">
+            ${it.has_image ? `<img src="${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${it.id}/image" />` : `<div class="no-photo"></div>`}
+            <input type="file" accept="image/*" style="display:none;" onchange="uploadItemImage('${it.id}', this)" />
+          </label>
+          <span class="field-label">Foto</span>
+        </div>
+        <div class="item-field name-field">
+          <input class="name" value="${(it.name || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="name" />
+          <span class="field-label">Producto</span>
+        </div>
+        <div class="item-field price-field">
+          <input class="price" type="number" value="${it.price}" onchange="updateItem('${it.id}', this)" data-field="price" />
+          <span class="field-label">Precio</span>
+        </div>
+        <div class="item-field category-field">
+          <input class="category" value="${(it.category || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="category" />
+          <span class="field-label">Categoría (opcional)</span>
+        </div>
+        <div class="item-field stock-field">
+          <input class="stock" type="number" min="0" placeholder="Sin límite" title="Stock (vacío = sin trackear)" value="${it.stock === null || it.stock === undefined ? "" : it.stock}" onchange="updateItem('${it.id}', this)" data-field="stock" />
+          <span class="field-label">Stock</span>
+        </div>
+        <label class="active-toggle" style="font-size:12px; display:flex; align-items:center; gap:4px; margin-top:6px;">
           <input type="checkbox" style="width:auto;" ${it.active ? "checked" : ""} onchange="updateItem('${it.id}', this)" data-field="active" /> activo
         </label>
-        <button class="small del" onclick="deleteItem('${it.id}')">Eliminar</button>
+        <button class="small del" style="margin-top:6px;" onclick="deleteItem('${it.id}')">Eliminar</button>
       </div>
     `).join("");
   }
