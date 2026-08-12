@@ -764,11 +764,16 @@ app.get("/api/chat/:slug/history", async (req, res) => {
 // Procesa un mensaje entrante y devuelve la respuesta — la usan tanto el chat web
 // como WhatsApp, así la lógica de negocio vive en un solo lugar.
 // El agente se desactiva 5 días después del último pago registrado. Si nunca se registró un
-// pago (negocios de antes de este cambio), no se bloquea — evita romper negocios ya activos.
+// pago, se usa la fecha de creación del negocio como referencia — pero solo para negocios
+// creados desde CORTE_BLOQUEO_SIN_PAGO en adelante, para no bloquear retroactivamente a
+// negocios viejos que ya estaban activos sin last_payment_date registrado.
 const DIAS_GRACIA_SIN_PAGO = 5;
+const CORTE_BLOQUEO_SIN_PAGO = new Date("2026-08-11T00:00:00Z");
 function isAgentInactive(business) {
-  if (!business.last_payment_date) return false;
-  const diasSinPago = (Date.now() - new Date(business.last_payment_date).getTime()) / (1000 * 60 * 60 * 24);
+  const fechaReferencia = business.last_payment_date
+    || (new Date(business.created_at) >= CORTE_BLOQUEO_SIN_PAGO ? business.created_at : null);
+  if (!fechaReferencia) return false;
+  const diasSinPago = (Date.now() - new Date(fechaReferencia).getTime()) / (1000 * 60 * 60 * 24);
   return diasSinPago > DIAS_GRACIA_SIN_PAGO;
 }
 
