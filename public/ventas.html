@@ -799,8 +799,8 @@
       return;
     }
     list.innerHTML = orders.map((o) => {
-      const items = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
-      const delivery = o.delivery_type === "despacho" ? `Despacho: ${o.delivery_address || "-"}` : (o.delivery_type === "retiro" ? "Retiro en tienda" : "");
+      const items = (o.items || []).map((it) => `${it.qty}x ${escapeHtml(it.name)}`).join(", ");
+      const delivery = o.delivery_type === "despacho" ? `Despacho: ${escapeHtml(o.delivery_address || "-")}` : (o.delivery_type === "retiro" ? "Retiro en tienda" : "");
       const statusOptions = Object.keys(STATUS_LABEL).map((s) =>
         `<option value="${s}" ${s === o.status ? "selected" : ""}>${STATUS_LABEL[s]}</option>`
       ).join("");
@@ -809,7 +809,7 @@
         <div class="card">
           <div class="order-row">
             <div>
-              ${o.customer_name ? `<div style="font-weight:700; font-size:13.5px; color:var(--navy);">${o.customer_name}</div>` : ""}
+              ${o.customer_name ? `<div style="font-weight:700; font-size:13.5px; color:var(--navy);">${escapeHtml(o.customer_name)}</div>` : ""}
               <div class="order-items">${items}</div>
               <div class="order-total">${fmt(o.total)}</div>
               <div class="order-meta">${delivery}</div>

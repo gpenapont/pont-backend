@@ -255,10 +255,10 @@
     }
     let html = '<div class="title">Tu pedido</div>';
     order.items.forEach((it) => {
-      html += `<div class="order-line"><span>${it.qty}x ${it.name}</span><span>${fmt(it.price * it.qty)}</span></div>`;
+      html += `<div class="order-line"><span>${it.qty}x ${escapeHtml(it.name)}</span><span>${fmt(it.price * it.qty)}</span></div>`;
     });
     if (order.delivery_type) {
-      html += `<div class="order-note">${order.delivery_type === "despacho" ? "Despacho a: " + (order.delivery_address || "por confirmar") : "Retiro"}</div>`;
+      html += `<div class="order-note">${order.delivery_type === "despacho" ? "Despacho a: " + escapeHtml(order.delivery_address || "por confirmar") : "Retiro"}</div>`;
     }
     html += `<div class="order-total"><span>Total</span><span>${fmt(order.total)}</span></div>`;
     orderCardEl.querySelector(".order-card").innerHTML = html;

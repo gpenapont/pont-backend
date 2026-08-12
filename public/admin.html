@@ -53,6 +53,14 @@
 
   function getKey() { return sessionStorage.getItem("admin_key"); }
 
+  // Nombre del negocio, razón social, RUT y correo de suscripción son texto libre que
+  // llena cada negocio al registrarse — hay que escaparlo antes de insertarlo en el HTML.
+  function escapeHtml(str) {
+    return String(str || "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
   function login() {
     const key = document.getElementById("adminKey").value.trim();
     if (!key) return;
@@ -85,13 +93,13 @@
       const invoiceStatus = b.invoice_status === "emitida" ? "emitida" : "pendiente";
       return `
         <tr>
-          <td><b>${b.name}</b><br/><span style="color:var(--muted); font-size:11.5px;">${b.slug}</span></td>
+          <td><b>${escapeHtml(b.name)}</b><br/><span style="color:var(--muted); font-size:11.5px;">${escapeHtml(b.slug)}</span></td>
           <td>
             <a href="${chatUrl}" target="_blank">Chat</a> ·
             <a href="${ventasUrl}" target="_blank">Panel</a>
           </td>
           <td><span class="status st-${status}">${STATUS_LABEL[status] || status}</span></td>
-          <td style="font-size:12px;">${b.subscription_billing_name || "<span style=\"color:var(--muted);\">—</span>"}${b.subscription_billing_rut ? `<br/><span style="color:var(--muted);">${b.subscription_billing_rut}</span>` : ""}${b.subscription_email ? `<br/><span style="color:var(--muted);">${b.subscription_email}</span>` : ""}</td>
+          <td style="font-size:12px;">${b.subscription_billing_name ? escapeHtml(b.subscription_billing_name) : "<span style=\"color:var(--muted);\">—</span>"}${b.subscription_billing_rut ? `<br/><span style="color:var(--muted);">${escapeHtml(b.subscription_billing_rut)}</span>` : ""}${b.subscription_email ? `<br/><span style="color:var(--muted);">${escapeHtml(b.subscription_email)}</span>` : ""}</td>
           <td><input type="date" value="${dateVal}" style="${dateColor}" onchange="updatePaymentDate('${b.slug}', this.value); markOverdue(this);" /></td>
           <td>
             <select class="invoice-select invoice-${invoiceStatus}" onchange="updateInvoiceStatus('${b.slug}', this.value, this)">
