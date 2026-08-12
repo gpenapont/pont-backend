@@ -1507,7 +1507,7 @@ app.post("/api/business/:slug/whatsapp/connect", async (req, res) => {
   }
 });
 
-// Crea el checkout de suscripción para un negocio: lo liga al plan compartido de $5.000/mes.
+// Crea el checkout de suscripción para un negocio: lo liga al plan compartido de $5.950/mes ($5.000 + IVA).
 app.post("/api/business/:slug/subscription/create", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
@@ -1530,7 +1530,7 @@ app.post("/api/business/:slug/subscription/create", async (req, res) => {
         auto_recurring: {
           frequency: 1,
           frequency_type: "months",
-          transaction_amount: 5000,
+          transaction_amount: 5950,
           currency_id: "CLP",
         },
         status: "pending",
