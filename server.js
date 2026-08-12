@@ -111,6 +111,30 @@ async function sendPasswordResetEmail(email, businessName, slug, token) {
   }
 }
 
+async function sendAbandonedCartAlertEmail(business, order) {
+  const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ") || "sin detalle";
+  const ventasUrl = `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${business.slug}`;
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: RESEND_FROM,
+      to: business.email,
+      subject: "Un cliente dejó un carrito abandonado en TeVende",
+      html: `
+        <p>Hola,</p>
+        <p>Un cliente de <b>${business.name}</b> armó un pedido pero no lo confirmó: ${items}${order.customer_name ? ` (${order.customer_name})` : ""}.</p>
+        <p>Puedes revisarlo y enviarle un recordatorio desde tu panel:</p>
+        <p><a href="${ventasUrl}" style="display:inline-block;background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Ver carritos abandonados</a></p>
+      `,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error("Error de Resend: " + err);
+  }
+}
+
 const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
 
 // Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
@@ -1803,6 +1827,41 @@ async function eliminarCarritosAbandonados() {
 }
 setInterval(eliminarCarritosAbandonados, 30 * 60 * 1000);
 eliminarCarritosAbandonados();
+
+// Le avisa por correo al negocio (al mail con el que creó su cuenta) apenas detecta un carrito
+// abandonado nuevo. abandoned_alert_sent evita mandar el mismo aviso más de una vez por carrito.
+async function alertarCarritosAbandonados() {
+  try {
+    const { rows: candidates } = await pool.query(
+      `select o.*
+       from orders o
+       join conversations conv on conv.id = o.conversation_id
+       left join messages m on m.conversation_id = conv.id
+       where o.status = 'draft' and o.items::text <> '[]' and coalesce(o.abandoned_alert_sent, false) = false
+       group by o.id
+       having max(m.created_at) < now() - interval '1 minute' * $1`,
+      [CARRITO_ABANDONADO_MINUTOS]
+    );
+
+    for (const order of candidates) {
+      const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
+      const business = bizRows[0];
+      if (!business || !business.email) continue;
+
+      try {
+        await sendAbandonedCartAlertEmail(business, order);
+      } catch (e) {
+        console.error("Error enviando alerta de carrito abandonado:", e);
+        continue;
+      }
+      await pool.query("update orders set abandoned_alert_sent = true where id = $1", [order.id]);
+    }
+  } catch (e) {
+    console.error("Error procesando alertas de carritos abandonados:", e);
+  }
+}
+setInterval(alertarCarritosAbandonados, 30 * 60 * 1000);
+alertarCarritosAbandonados();
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
