@@ -1036,7 +1036,7 @@
           <input type="file" accept="image/*" style="display:none;" onchange="uploadItemImage('${it.id}', this)" />
         </label>
         <input class="name" value="${(it.name || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="name" />
-        <input class="price" type="number" value="${it.price}" onchange="updateItem('${it.id}', this)" data-field="price" />
+        <input class="price" type="text" inputmode="numeric" value="${(it.price || 0).toLocaleString("es-CL")}" onchange="updateItem('${it.id}', this)" data-field="price" />
         <input class="category" value="${(it.category || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="category" />
         <input class="stock" type="number" min="0" placeholder="Sin límite" title="Stock (vacío = sin trackear)" value="${it.stock === null || it.stock === undefined ? "" : it.stock}" onchange="updateItem('${it.id}', this)" data-field="stock" />
         <label class="active-toggle">
@@ -1052,13 +1052,14 @@
     if (!item) return;
     const field = changedEl.dataset.field;
     if (field === "active") item[field] = changedEl.checked;
-    else if (field === "price") item[field] = Number(changedEl.value);
+    else if (field === "price") item[field] = Number(changedEl.value.replace(/\D/g, "")) || 0;
     else if (field === "stock") item[field] = changedEl.value === "" ? null : Number(changedEl.value);
     else item[field] = changedEl.value;
     await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${id}`, {
       method: "PUT", headers: authHeaders(),
       body: JSON.stringify({ name: item.name, price: item.price, category: item.category, active: item.active, stock: item.stock }),
     });
+    if (field === "price") renderItems();
   }
 
   function uploadItemImage(id, input) {
