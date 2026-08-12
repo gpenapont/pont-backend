@@ -1637,7 +1637,7 @@ app.get("/api/admin/businesses", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `select slug, name, subscription_email, subscription_status, last_payment_date, invoice_status, created_at,
-       subscription_billing_name, subscription_billing_rut
+       subscription_billing_name, subscription_billing_rut, subscription_cancel_at_period_end
        from businesses order by created_at desc`
     );
     res.json({ businesses: rows });
