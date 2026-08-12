@@ -10,14 +10,48 @@ import express from "express";
 import cors from "cors";
 import pkg from "pg";
 import crypto from "crypto";
+import rateLimit from "express-rate-limit";
 import "dotenv/config";
 
 const { Pool } = pkg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+// Red de seguridad: muchas rutas todavía no tienen try/catch propio (hoy quedaron 20 así).
+// Sin esto, un error de base de datos sin capturar en cualquiera de ellas tumba TODO el
+// proceso — afectando a todos los negocios, no solo al que disparó el error (nos pasó dos
+// veces: choque de rutas de /bulk, y el endpoint de admin sin la columna nueva). Con este
+// handler, esa request puntual queda colgada/falla, pero el servidor sigue en pie para todo
+// lo demás. No reemplaza poner try/catch en cada ruta, pero evita la caída total mientras eso
+// se hace con calma.
+process.on("unhandledRejection", (reason) => {
+  console.error("Promesa rechazada sin capturar (una request puede haber quedado colgada):", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Excepción sin capturar (el proceso sigue en pie):", err);
+});
+
 const app = express();
-app.use(express.json({ limit: "5mb" })); // el límite por defecto es muy chico para subir un logo
+app.use(express.json({
+  limit: "5mb", // el límite por defecto es muy chico para subir un logo
+  verify: (req, res, buf) => { req.rawBody = buf; }, // lo necesita el webhook de WhatsApp para verificar la firma
+}));
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
+
+// Límite de intentos para las rutas más expuestas a fuerza bruta / abuso (registro y
+// recuperación de clave) — 20 intentos cada 15 minutos por IP. El resto de las rutas se
+// protege con la clave del panel en sí, no con rate limiting general (para no arriesgar
+// cortar tráfico legítimo de negocios con mucho volumen de chat).
+const authRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." },
+});
+
+// Las rutas de admin son bajo volumen (solo las usa Gonzalo), así que es seguro limitarlas
+// todas — protege ADMIN_PASSWORD, que funciona como llave maestra de toda la plataforma.
+app.use("/api/admin", authRateLimit);
 
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || "").trim();
 const GOOGLE_CLIENT_SECRET = (process.env.GOOGLE_CLIENT_SECRET || "").trim();
@@ -342,7 +376,7 @@ app.get("/api/business/:slug", async (req, res) => {
 // Autoregistro: crea un negocio nuevo sin intervención manual. Protegido con captcha (para que no
 // sea un bot) y verificación de correo (para que sea un correo real) — no con un código que Gonzalo
 // tenga que repartir a mano, así escala sin que él intervenga en cada registro.
-app.post("/api/business/signup", async (req, res) => {
+app.post("/api/business/signup", authRateLimit, async (req, res) => {
   const { name, email, password, captchaToken } = req.body;
   if (!name || !name.trim() || !email || !email.trim() || !password || !password.trim()) {
     return res.status(400).json({ error: "Falta el nombre del negocio, el correo o la clave" });
@@ -407,7 +441,7 @@ app.post("/api/business/signup", async (req, res) => {
 
 // Pide el link de recuperación de clave. Responde igual exista o no una cuenta con ese correo
 // (para no revelar qué correos están registrados) — si existe, le llega un email de verdad.
-app.post("/api/business/forgot-password", async (req, res) => {
+app.post("/api/business/forgot-password", authRateLimit, async (req, res) => {
   const { email } = req.body;
   if (!email || !email.trim()) return res.status(400).json({ error: "Falta el correo" });
 
@@ -431,7 +465,7 @@ app.post("/api/business/forgot-password", async (req, res) => {
 });
 
 // Confirma el link de recuperación y guarda la clave nueva.
-app.post("/api/business/reset-password", async (req, res) => {
+app.post("/api/business/reset-password", authRateLimit, async (req, res) => {
   const { token, password } = req.body;
   if (!token || !password || !password.trim()) return res.status(400).json({ error: "Falta el token o la clave nueva" });
 
@@ -516,10 +550,22 @@ app.get("/api/business/:slug/settings", async (req, res) => {
 
 // Ruta dedicada solo para el logo, separada de settings general para no arriesgar
 // pisar el resto de la configuración cuando se sube una imagen nueva.
+// Solo se aceptan formatos de imagen "planos" — nada de SVG, que puede traer <script>
+// embebido y ejecutarse si algún día se sirve o se abre distinto a como se usa hoy (<img>).
+const SAFE_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+function isSafeImageDataUri(dataUri) {
+  if (!dataUri) return true; // vacío = se está borrando la imagen, no hay nada que validar
+  const match = dataUri.match(/^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+);base64,/);
+  return !!match && SAFE_IMAGE_TYPES.includes(match[1].toLowerCase());
+}
+
 app.put("/api/business/:slug/logo", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
   const { logo_data } = req.body;
+  if (!isSafeImageDataUri(logo_data)) {
+    return res.status(400).json({ error: "Formato de imagen no permitido. Usa JPG, PNG, WEBP o GIF." });
+  }
   await pool.query("update businesses set logo_data=$1 where id=$2", [logo_data || null, business.id]);
   res.json({ saved: true });
 });
@@ -652,6 +698,9 @@ app.put("/api/business/:slug/menu-items/:itemId/image", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
   const { image_data } = req.body;
+  if (!isSafeImageDataUri(image_data)) {
+    return res.status(400).json({ error: "Formato de imagen no permitido. Usa JPG, PNG, WEBP o GIF." });
+  }
   try {
     await pool.query("update menu_items set image_data=$1 where id=$2 and business_id=$3", [
       image_data || null,
@@ -1280,6 +1329,18 @@ app.get("/api/whatsapp/webhook", (req, res) => {
 // Acá llegan los mensajes reales de WhatsApp. Meta identifica el número al que le escribieron
 // (phone_number_id) — con eso buscamos a qué negocio pertenece y usamos el mismo motor del chat web.
 app.post("/api/whatsapp/webhook", async (req, res) => {
+  // Verifica que el mensaje realmente venga de Meta (y no de cualquiera que le pegue al
+  // endpoint) comparando la firma HMAC-SHA256 del body crudo contra el header que manda Meta.
+  if (FACEBOOK_APP_SECRET) {
+    const signature = req.headers["x-hub-signature-256"] || "";
+    const expected = "sha256=" + crypto.createHmac("sha256", FACEBOOK_APP_SECRET).update(req.rawBody || Buffer.from("")).digest("hex");
+    const valid = signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    if (!valid) {
+      console.error("Firma inválida en webhook de WhatsApp — mensaje rechazado.");
+      return res.sendStatus(401);
+    }
+  }
+
   res.sendStatus(200); // Confirmar recepción rápido; Meta reintenta si no respondes a tiempo.
 
   try {

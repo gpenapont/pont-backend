@@ -84,7 +84,7 @@
 
     document.getElementById("rows").innerHTML = data.businesses.map((b) => {
       const chatUrl = `${SITE_URL}/?negocio=${b.slug}`;
-      const ventasUrl = `${SITE_URL}/ventas.html?negocio=${b.slug}&admin_key=${encodeURIComponent(getKey() || "")}`;
+      const ventasUrl = `${SITE_URL}/ventas.html?negocio=${b.slug}`;
       const status = b.subscription_status || "inactive";
       const dateVal = b.last_payment_date ? new Date(b.last_payment_date).toISOString().slice(0, 10) : "";
       const daysSincePayment = dateVal ? (Date.now() - new Date(dateVal).getTime()) / 86400000 : null;
@@ -96,7 +96,7 @@
           <td><b>${escapeHtml(b.name)}</b><br/><span style="color:var(--muted); font-size:11.5px;">${escapeHtml(b.slug)}</span></td>
           <td>
             <a href="${chatUrl}" target="_blank">Chat</a> ·
-            <a href="${ventasUrl}" target="_blank">Panel</a>
+            <a href="${ventasUrl}" target="_blank" onclick="localStorage.setItem('pont_admin_bridge_key', getKey() || '')">Panel</a>
           </td>
           <td><span class="status st-${status}">${STATUS_LABEL[status] || status}</span></td>
           <td style="font-size:12px;">${b.subscription_billing_name ? escapeHtml(b.subscription_billing_name) : "<span style=\"color:var(--muted);\">—</span>"}${b.subscription_billing_rut ? `<br/><span style="color:var(--muted);">${escapeHtml(b.subscription_billing_rut)}</span>` : ""}${b.subscription_email ? `<br/><span style="color:var(--muted);">${escapeHtml(b.subscription_email)}</span>` : ""}</td>

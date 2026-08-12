@@ -1144,10 +1144,14 @@
     if (googleResult === "connected") setTimeout(() => alert("¡Google Sheets conectado! Ya se creó tu planilla."), 300);
     if (googleResult === "error") setTimeout(() => alert("No se pudo conectar con Google. Intenta de nuevo."), 300);
 
-    // Si llegamos desde el panel de administrador, viene la clave de admin en la URL —
-    // la usamos como si fuera la clave del negocio, sin pedir login.
-    const adminKey = new URLSearchParams(window.location.search).get("admin_key");
-    if (adminKey) setKey(adminKey);
+    // Si llegamos desde el panel de administrador, la clave de admin queda en localStorage
+    // (no en la URL, para que no quede guardada en el historial del navegador ni en logs) —
+    // la leemos una sola vez, la borramos de inmediato, y la usamos como si fuera la clave del negocio.
+    const adminKey = localStorage.getItem("pont_admin_bridge_key");
+    if (adminKey) {
+      setKey(adminKey);
+      localStorage.removeItem("pont_admin_bridge_key");
+    }
 
     if (getKey()) {
       const ok = await loadAll();
