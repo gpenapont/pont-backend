@@ -565,6 +565,67 @@ app.post("/api/business/:slug/menu-items", async (req, res) => {
   res.json(rows[0]);
 });
 
+// Interpreta texto pegado con un producto por línea: "Nombre, Precio, Categoría" o el mismo
+// formato separado por tabulaciones (lo que queda al copiar y pegar directo desde Excel o Sheets).
+function parseCatalogText(text) {
+  const lines = (text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const items = [];
+  for (const line of lines) {
+    const parts = line.includes("\t") ? line.split("\t") : line.split(",");
+    const name = (parts[0] || "").trim();
+    const priceDigits = (parts[1] || "").replace(/[^\d]/g, "");
+    const price = parseInt(priceDigits, 10);
+    const category = (parts[2] || "").trim() || null;
+    if (name && price) items.push({ name, price, category });
+  }
+  return items;
+}
+
+// Reemplaza TODO el catálogo del negocio de una sola vez, a partir de texto pegado
+// (ideal para un cliente básico: copia su lista desde Excel/Sheets y la pega directo).
+// IMPORTANTE: esta ruta va ANTES que "/menu-items/:itemId" — si fuera después, Express
+// interpretaría "bulk" como si fuera un itemId y nunca llegaría aquí (bug real que ya pasó).
+app.put("/api/business/:slug/menu-items/bulk", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const items = parseCatalogText(req.body.text);
+  if (items.length === 0) {
+    return res.status(400).json({ error: "No se reconoció ningún producto en el texto pegado" });
+  }
+
+  // Todo o nada: si un producto falla al insertarse a mitad de camino, no queremos terminar
+  // con el catálogo ya borrado y solo la mitad de los productos nuevos cargados.
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query("begin");
+    await client.query("delete from menu_items where business_id = $1", [business.id]);
+    for (const item of items) {
+      await client.query("insert into menu_items (business_id, name, price, category) values ($1,$2,$3,$4)", [
+        business.id,
+        item.name,
+        item.price,
+        item.category,
+      ]);
+    }
+    await client.query("commit");
+    res.json({ replaced: items.length });
+  } catch (e) {
+    console.error("Error reemplazando el catálogo:", e);
+    if (client) {
+      try {
+        await client.query("rollback");
+      } catch (rollbackErr) {
+        console.error("Error además al hacer rollback:", rollbackErr);
+      }
+    }
+    res.status(500).json({ error: "No se pudo reemplazar el catálogo. Tu catálogo anterior sigue intacto." });
+  } finally {
+    if (client) client.release();
+  }
+});
+
 app.put("/api/business/:slug/menu-items/:itemId", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
@@ -622,65 +683,6 @@ app.get("/api/business/:slug/menu-items/:itemId/image", async (req, res) => {
   } catch (e) {
     console.error("Error sirviendo la foto del producto:", e);
     res.status(500).send("Error interno");
-  }
-});
-
-// Interpreta texto pegado con un producto por línea: "Nombre, Precio, Categoría" o el mismo
-// formato separado por tabulaciones (lo que queda al copiar y pegar directo desde Excel o Sheets).
-function parseCatalogText(text) {
-  const lines = (text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const items = [];
-  for (const line of lines) {
-    const parts = line.includes("\t") ? line.split("\t") : line.split(",");
-    const name = (parts[0] || "").trim();
-    const priceDigits = (parts[1] || "").replace(/[^\d]/g, "");
-    const price = parseInt(priceDigits, 10);
-    const category = (parts[2] || "").trim() || null;
-    if (name && price) items.push({ name, price, category });
-  }
-  return items;
-}
-
-// Reemplaza TODO el catálogo del negocio de una sola vez, a partir de texto pegado
-// (ideal para un cliente básico: copia su lista desde Excel/Sheets y la pega directo).
-app.put("/api/business/:slug/menu-items/bulk", async (req, res) => {
-  const business = await getBusinessWithAuth(req, res);
-  if (!business) return;
-
-  const items = parseCatalogText(req.body.text);
-  if (items.length === 0) {
-    return res.status(400).json({ error: "No se reconoció ningún producto en el texto pegado" });
-  }
-
-  // Todo o nada: si un producto falla al insertarse a mitad de camino, no queremos terminar
-  // con el catálogo ya borrado y solo la mitad de los productos nuevos cargados.
-  let client;
-  try {
-    client = await pool.connect();
-    await client.query("begin");
-    await client.query("delete from menu_items where business_id = $1", [business.id]);
-    for (const item of items) {
-      await client.query("insert into menu_items (business_id, name, price, category) values ($1,$2,$3,$4)", [
-        business.id,
-        item.name,
-        item.price,
-        item.category,
-      ]);
-    }
-    await client.query("commit");
-    res.json({ replaced: items.length });
-  } catch (e) {
-    console.error("Error reemplazando el catálogo:", e);
-    if (client) {
-      try {
-        await client.query("rollback");
-      } catch (rollbackErr) {
-        console.error("Error además al hacer rollback:", rollbackErr);
-      }
-    }
-    res.status(500).json({ error: "No se pudo reemplazar el catálogo. Tu catálogo anterior sigue intacto." });
-  } finally {
-    if (client) client.release();
   }
 });
 
