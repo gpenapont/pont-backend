@@ -532,6 +532,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     mp_checkout_url: business.mp_checkout_url,
     subscription_billing_name: business.subscription_billing_name,
     subscription_billing_rut: business.subscription_billing_rut,
+    subscription_cancel_at_period_end: business.subscription_cancel_at_period_end,
     logo_data: business.logo_data,
     google_sheets_enabled: business.google_sheets_enabled,
     google_spreadsheet_url: business.google_spreadsheet_url,
@@ -1559,6 +1560,22 @@ app.post("/api/business/:slug/subscription/create", async (req, res) => {
   }
 });
 
+// Programa (o deshace) la baja de la suscripción para la próxima fecha de renovación — no cancela
+// de inmediato en Mercado Pago, solo marca la intención; el período ya pagado sigue activo y es
+// el job "procesarCancelacionesProgramadas" el que efectivamente cancela antes del próximo cobro.
+app.put("/api/business/:slug/subscription/cancel-at-period-end", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const cancel = !!req.body.cancel;
+  if (cancel && business.subscription_status !== "authorized") {
+    return res.status(400).json({ error: "No tienes una suscripción activa para dar de baja" });
+  }
+
+  await pool.query("update businesses set subscription_cancel_at_period_end=$1 where id=$2", [cancel, business.id]);
+  res.json({ subscription_cancel_at_period_end: cancel });
+});
+
 // Mercado Pago avisa aquí cuando una suscripción se activa, se pausa o se cancela.
 app.post("/api/mercadopago/webhook", async (req, res) => {
   res.sendStatus(200); // confirmar recepción rápido
@@ -1702,6 +1719,48 @@ async function cancelarPedidosVencidos() {
 }
 setInterval(cancelarPedidosVencidos, 30 * 60 * 1000);
 cancelarPedidosVencidos();
+
+// Mercado Pago no tiene un "cancelar al final del período" nativo: solo se puede cancelar de
+// inmediato. Por eso, cuando un negocio programó la baja, este job cancela la preapproval en
+// Mercado Pago un par de días antes de la próxima renovación (last_payment_date + ~1 mes) para
+// asegurar que no se alcance a generar el próximo cobro, sin cortar el servicio antes de tiempo.
+const DIAS_ANTICIPACION_CANCELACION = 2;
+async function procesarCancelacionesProgramadas() {
+  try {
+    const { rows } = await pool.query(
+      `select * from businesses
+       where subscription_cancel_at_period_end = true
+         and subscription_status = 'authorized'
+         and mp_preapproval_id is not null
+         and last_payment_date is not null
+         and last_payment_date <= now() - interval '1 month' + interval '1 day' * $1`,
+      [DIAS_ANTICIPACION_CANCELACION]
+    );
+    for (const business of rows) {
+      try {
+        const mpRes = await fetch(`https://api.mercadopago.com/preapproval/${business.mp_preapproval_id}`, {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "cancelled" }),
+        });
+        if (!mpRes.ok) {
+          console.error(`No se pudo cancelar la suscripción de ${business.slug} en Mercado Pago:`, await mpRes.text());
+          continue;
+        }
+        await pool.query(
+          "update businesses set subscription_status='cancelled', subscription_cancel_at_period_end=false where id=$1",
+          [business.id]
+        );
+      } catch (e) {
+        console.error(`Error cancelando suscripción programada de ${business.slug}:`, e);
+      }
+    }
+  } catch (e) {
+    console.error("Error procesando cancelaciones programadas:", e);
+  }
+}
+setInterval(procesarCancelacionesProgramadas, 30 * 60 * 1000);
+procesarCancelacionesProgramadas();
 
 // Los carritos abandonados (pedido armado, nunca confirmado) se eliminan solos después de 24
 // horas sin actividad del cliente, y le queda un mensaje en la conversación explicando qué pasó.

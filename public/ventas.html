@@ -400,6 +400,13 @@
         <p style="font-size:13px; color:#1E7B34; font-weight:700; margin:0 0 10px;">✓ Suscripción activa</p>
         <p style="font-size:12.5px; color:var(--muted); margin:0;">Último pago: <b id="subLastPayment">—</b></p>
         <p style="font-size:12.5px; color:var(--muted); margin:2px 0 0;">Próximo pago estimado: <b id="subNextPayment">—</b></p>
+        <div id="subCancelPending" style="display:none; margin-top:12px;">
+          <p style="font-size:12.5px; color:#8A6D00; margin:0 0 8px;">Programaste la baja: se cancelará el <b id="subCancelDate">—</b> y no se hará otro cobro. Tu agente sigue activo hasta esa fecha.</p>
+          <div class="save-row"><button style="background:var(--muted);" onclick="setCancelAtPeriodEnd(false)">Deshacer baja</button></div>
+        </div>
+        <div id="subCancelActive" style="margin-top:12px;">
+          <div class="save-row"><button style="background:var(--muted);" onclick="setCancelAtPeriodEnd(true)">Dar de baja al final del período</button></div>
+        </div>
       </div>
       <div id="subOther" style="display:none;">
         <p style="font-size:13px; color:var(--coral); font-weight:700; margin:0 0 12px;" id="subOtherMsg"></p>
@@ -518,10 +525,12 @@
     reader.readAsDataURL(file);
   }
 
-  function renderSubscription(status, checkoutUrl, lastPaymentDate) {
+  function renderSubscription(status, checkoutUrl, lastPaymentDate, cancelAtPeriodEnd) {
     ["subInactive", "subPending", "subActive", "subOther"].forEach((id) => (document.getElementById(id).style.display = "none"));
     if (status === "authorized") {
       document.getElementById("subActive").style.display = "block";
+      document.getElementById("subCancelPending").style.display = cancelAtPeriodEnd ? "block" : "none";
+      document.getElementById("subCancelActive").style.display = cancelAtPeriodEnd ? "none" : "block";
       if (lastPaymentDate) {
         const last = new Date(lastPaymentDate);
         const next = new Date(last);
@@ -529,6 +538,7 @@
         const fmt = (d) => d.toLocaleDateString("es-CL", { day: "numeric", month: "long", year: "numeric" });
         document.getElementById("subLastPayment").textContent = fmt(last);
         document.getElementById("subNextPayment").textContent = fmt(next);
+        document.getElementById("subCancelDate").textContent = fmt(next);
       }
     } else if (status === "pending") {
       document.getElementById("subPending").style.display = "block";
@@ -556,6 +566,17 @@
     const data = await res.json();
     if (!res.ok || !data.checkoutUrl) { alert(data.error || "No se pudo iniciar la suscripción."); return; }
     window.location.href = data.checkoutUrl;
+  }
+
+  async function setCancelAtPeriodEnd(cancel) {
+    if (cancel && !confirm("¿Dar de baja tu suscripción? Seguirá activa hasta la próxima fecha de renovación, pero no se hará otro cobro después de esa fecha.")) return;
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/subscription/cancel-at-period-end`, {
+      method: "PUT",
+      headers: authHeaders(),
+      body: JSON.stringify({ cancel }),
+    });
+    if (!res.ok) { alert("No se pudo actualizar la suscripción."); return; }
+    loadSettings();
   }
   let waPendingCode = null;
   let waPendingPhoneData = null;
@@ -942,7 +963,7 @@
       const data = await res.json();
       document.getElementById("bizTitle").textContent = data.name || BUSINESS_SLUG;
       document.getElementById("greeting").value = data.greeting || "";
-      renderSubscription(data.subscription_status, data.mp_checkout_url, data.last_payment_date);
+      renderSubscription(data.subscription_status, data.mp_checkout_url, data.last_payment_date, data.subscription_cancel_at_period_end);
       if (data.logo_data) {
         const preview = document.getElementById("logoPreview");
         preview.src = data.logo_data;
