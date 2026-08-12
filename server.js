@@ -1066,14 +1066,19 @@ app.get("/api/business/:slug/customers", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
 
+  // Se parte desde conversations (existe para cualquier chat) y no desde customers,
+  // porque customers solo tiene fila cuando el agente alcanzó a capturar nombre o
+  // dirección — antes de ese fix, un cliente que solo chateaba sin llegar a esa parte
+  // no aparecía nunca en esta lista pese a tener conversación real.
   const { rows } = await pool.query(
-    `select c.session_id, c.name, c.last_address, c.created_at,
+    `select conv.session_id, c.name, c.last_address,
+            coalesce(c.created_at, min(m.created_at)) as created_at,
             max(m.created_at) as last_message_at, count(m.id) as message_count
-     from customers c
-     left join conversations conv on conv.business_id = c.business_id and conv.session_id = c.session_id
+     from conversations conv
+     left join customers c on c.business_id = conv.business_id and c.session_id = conv.session_id
      left join messages m on m.conversation_id = conv.id
-     where c.business_id = $1
-     group by c.session_id, c.name, c.last_address, c.created_at
+     where conv.business_id = $1
+     group by conv.session_id, c.name, c.last_address, c.created_at
      order by last_message_at desc nulls last`,
     [business.id]
   );
