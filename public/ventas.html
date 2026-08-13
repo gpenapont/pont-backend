@@ -898,16 +898,18 @@
           <div class="order-row">
             <div>
               ${o.customer_name ? `<div style="font-weight:700; font-size:13.5px; color:var(--navy);">${escapeHtml(o.customer_name)}</div>` : ""}
-              ${o.customer_email || o.customer_rut ? `<div class="order-meta">${[o.customer_email ? escapeHtml(o.customer_email) : null, o.customer_rut ? escapeHtml(o.customer_rut) : null].filter(Boolean).join(" · ")}</div>` : ""}
               <div class="order-items">${items}</div>
               <div class="order-total">${fmt(o.total)}</div>
               <div class="order-meta">${delivery}</div>
               <div class="order-meta">${new Date(o.created_at).toLocaleString("es-CL")}</div>
+              <select style="margin-top:8px; background:${c.bg}; color:${c.fg}; border-color:${c.fg};" onchange="changeStatus('${o.id}', this.value)">${statusOptions}</select>
             </div>
             <div style="text-align:right;">
-              <select style="background:${c.bg}; color:${c.fg}; border-color:${c.fg};" onchange="changeStatus('${o.id}', this.value)">${statusOptions}</select><br/>
-              <button class="small" style="margin-top:8px; background:${o.invoice_status === "emitida" ? "var(--mint)" : "#5C6B76"}; color:${o.invoice_status === "emitida" ? "var(--navy)" : "#fff"};" onclick="toggleInvoiceStatus('${o.id}', '${o.invoice_status === "emitida" ? "pendiente" : "emitida"}')">${o.invoice_status === "emitida" ? "✓ Boleta/factura emitida" : "Marcar boleta/factura emitida"}</button><br/>
-              <button class="small" style="margin-top:8px; background:#5C6B76" onclick="deleteOrder('${o.id}')">Eliminar</button>
+              ${o.customer_email || o.customer_rut ? `<div class="order-meta">${[o.customer_email ? escapeHtml(o.customer_email) : null, o.customer_rut ? escapeHtml(o.customer_rut) : null].filter(Boolean).join(" · ")}</div>` : ""}
+              <button class="small" style="margin-top:8px; background:${o.invoice_status === "emitida" ? "var(--mint)" : "#5C6B76"}; color:${o.invoice_status === "emitida" ? "var(--navy)" : "#fff"};" onclick="toggleInvoiceStatus('${o.id}', '${o.invoice_status === "emitida" ? "pendiente" : "emitida"}')">${o.invoice_status === "emitida" ? "✓ Boleta/factura emitida" : "Marcar boleta/factura emitida"}</button>
+            </div>
+            <div>
+              <button class="small" style="background:#5C6B76" onclick="deleteOrder('${o.id}')">Eliminar</button>
             </div>
           </div>
         </div>`;
@@ -1019,9 +1021,10 @@
   }
 
   async function toggleInvoiceStatus(orderId, invoice_status) {
-    await fetch(`${BACKEND_URL}/api/orders/${orderId}/invoice-status`, {
+    const res = await fetch(`${BACKEND_URL}/api/orders/${orderId}/invoice-status`, {
       method: "PATCH", headers: authHeaders(), body: JSON.stringify({ invoice_status }),
     });
+    if (!res.ok) { alert("No se pudo actualizar (código " + res.status + ")."); return; }
     loadOrders();
   }
 
