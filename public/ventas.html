@@ -194,6 +194,17 @@
     </div>
 
     <div class="card">
+      <h2>Datos de facturación de tus clientes</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px; line-height:1.5;">
+        Si lo activas, tu asistente le va a pedir a cada cliente su nombre (persona o empresa), RUT y correo antes de confirmar el pedido, para poder emitirle boleta/factura y más adelante ofrecerle descuentos por correo o WhatsApp cuando lleve tiempo sin volver a comprar. Nunca es obligatorio para el cliente — si no lo da, el pedido sigue igual.
+      </p>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
+        <input type="checkbox" id="askBillingData" style="width:auto;" /> Pedir nombre, RUT y correo en cada pedido
+      </label>
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
+    </div>
+
+    <div class="card">
       <h2>Modo pausa (para atender tú mismo por WhatsApp)</h2>
       <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
         <input type="checkbox" id="botPaused" style="width:auto;" /> Pausar el bot ahora mismo (yo voy a contestar a mano)
@@ -923,6 +934,7 @@
         <div>
           <div class="customer-name">${escapeHtml(c.name || "Cliente sin nombre")}</div>
           ${c.last_address ? `<div class="customer-address">${escapeHtml(c.last_address)}</div>` : ""}
+          ${c.email || c.rut ? `<div class="customer-address">${[c.email ? escapeHtml(c.email) : null, c.rut ? escapeHtml(c.rut) : null].filter(Boolean).join(" · ")}</div>` : ""}
         </div>
         <div class="customer-meta">
           ${c.last_message_at ? new Date(c.last_message_at).toLocaleString("es-CL") : ""}<br/>
@@ -1042,6 +1054,7 @@
       document.getElementById("pickupAddress").value = data.pickup_address || "";
       document.getElementById("deliveryEnabled").checked = data.delivery_enabled !== false;
       document.getElementById("deliveryRules").value = data.delivery_rules || "";
+      document.getElementById("askBillingData").checked = !!data.ask_billing_data;
       pauseSchedule = data.pause_schedule || {};
       renderSchedule();
       currentItems = data.menuItems || [];
@@ -1077,6 +1090,7 @@
         delivery_enabled: document.getElementById("deliveryEnabled").checked,
         delivery_rules: document.getElementById("deliveryRules").value,
         low_stock_threshold: document.getElementById("lowStockThreshold").value,
+        ask_billing_data: document.getElementById("askBillingData").checked,
       }),
     });
     const row = event && event.target ? event.target.closest(".save-row") : null;

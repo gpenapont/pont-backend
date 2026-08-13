@@ -230,11 +230,18 @@ function buildSystemPrompt(business, menuItems, customer) {
 
   const knownName = customer && customer.name ? customer.name : null;
   const knownAddress = customer && customer.last_address ? customer.last_address : null;
+  const knownEmail = customer && customer.email ? customer.email : null;
+  const knownRut = customer && customer.rut ? customer.rut : null;
   const customerSection = `Información que ya tienes de este cliente (de conversaciones o pedidos anteriores en este mismo canal):
 - Nombre: ${knownName ? knownName : "todavía no lo sabes"}
 - Última dirección de despacho usada: ${knownAddress ? knownAddress : "todavía no la sabes"}
+${business.ask_billing_data ? `- Correo: ${knownEmail ? knownEmail : "todavía no lo sabes"}\n- RUT: ${knownRut ? knownRut : "todavía no lo sabes"}` : ""}
 ${knownName ? "Ya sabes su nombre, no se lo vuelvas a preguntar; puedes usarlo para dirigirte a él o ella de forma natural, sin abusar." : "No sabes su nombre todavía — pregúntaselo en algún momento natural y temprano de la conversación (no como si fuera un formulario), para poder incluirlo en el pedido."}
 ${knownAddress ? `Ya tienes una dirección de despacho registrada. Si el cliente pide despacho, NO se la vuelvas a preguntar — menciónala directamente en el resumen (por ejemplo: "despacho a ${knownAddress}, ¿sigue siendo esa dirección?") y solo pide una nueva si te dice que cambió.` : ""}`;
+
+  const billingSection = business.ask_billing_data
+    ? `- Este negocio quiere poder emitir boleta/factura y ofrecer descuentos más adelante a sus clientes. Por eso, en algún momento natural antes de confirmar el pedido (por ejemplo junto con el resumen final), pide el nombre (de la persona, o de la empresa si compra a nombre de una), RUT y correo electrónico — a menos que ya los tengas (revisa la información conocida más arriba). Pídelo una sola vez, sin insistir. Si el cliente no te los da o prefiere no darlos, no se lo vuelvas a pedir y sigue adelante con el pedido igual — estos datos nunca son obligatorios para completar una venta.`
+    : "";
 
   return `Eres el agente de pedidos de ${business.name}. Los clientes te escriben online, desde el sitio web o un link compartido.
 
@@ -259,13 +266,15 @@ ${hasAnyPhoto ? `- Algunos productos del catálogo tienen foto disponible (marca
 - ${buildDeliverySection(business)}
 - Después resume lo que llevan, el nombre del cliente si lo sabes, el tipo de entrega con su dirección si aplica, y pregunta si está todo correcto.
 - Marcar el pedido como confirmado solo cuando el cliente lo confirme explícitamente.
+${billingSection}
 ${paymentSection}
 
 Formato obligatorio de cada respuesta:
 Primero tu respuesta al cliente en texto plano — esta parte nunca puede estar vacía, ni siquiera al confirmar el pedido, siempre debe haber un mensaje visible para el cliente. Después, en una línea aparte, agrega exactamente un bloque con el estado del pedido, así:
-<order>{"customer_name":"...","items":[{"name":"...","qty":1,"price":0}],"total":0,"delivery":{"type":"despacho","address":"..."},"payment":{"status":"pendiente"},"confirmed":false}</order>
+<order>{"customer_name":"...","customer_email":"...","customer_rut":"...","items":[{"name":"...","qty":1,"price":0}],"total":0,"delivery":{"type":"despacho","address":"..."},"payment":{"status":"pendiente"},"confirmed":false}</order>
 
 El campo customer_name debe llevar el nombre del cliente apenas lo sepas (si ya lo sabías de antes, repítelo igual en cada bloque). Si aún no lo sabes, usa null.
+Los campos customer_email y customer_rut deben llevar el correo y RUT del cliente si te los llegó a dar (repítelos igual en cada bloque si ya los sabías de antes); si no te los dio, usa null en ambos. Nunca los inventes.
 El campo payment.status puede ser: null, "pendiente" o "cliente_avisa_transferencia" (usa null si este negocio no cobra por transferencia).
 Si aún no saben el tipo de entrega, usa "delivery":null. Si aún no han pedido nada, usa items vacío y total 0. Este bloque nunca lo ve el cliente. Nunca lo omitas.`;
 }
@@ -497,6 +506,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     delivery_enabled: business.delivery_enabled !== false,
     delivery_rules: business.delivery_rules,
     low_stock_threshold: business.low_stock_threshold,
+    ask_billing_data: business.ask_billing_data,
     menuItems,
   });
 });
@@ -533,20 +543,22 @@ app.put("/api/business/:slug/settings", async (req, res) => {
     whatsapp_phone_number_id, whatsapp_access_token,
     bot_paused, pause_schedule_enabled, pause_schedule,
     pickup_enabled, pickup_address, delivery_enabled, delivery_rules,
-    low_stock_threshold,
+    low_stock_threshold, ask_billing_data,
   } = req.body;
   await pool.query(
     `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
      bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10,
      whatsapp_phone_number_id=$11, whatsapp_access_token=$12, bot_paused=$13, pause_schedule_enabled=$14, pause_schedule=$15,
-     pickup_enabled=$16, pickup_address=$17, delivery_enabled=$18, delivery_rules=$19, low_stock_threshold=$20
-     where id=$21`,
+     pickup_enabled=$16, pickup_address=$17, delivery_enabled=$18, delivery_rules=$19, low_stock_threshold=$20,
+     ask_billing_data=$21
+     where id=$22`,
     [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
      !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null,
      whatsapp_phone_number_id || null, whatsapp_access_token || null,
      !!bot_paused, !!pause_schedule_enabled, JSON.stringify(pause_schedule || {}),
      !!pickup_enabled, pickup_address || null, !!delivery_enabled, delivery_rules || null,
      low_stock_threshold === "" || low_stock_threshold === undefined || low_stock_threshold === null ? null : Number(low_stock_threshold),
+     !!ask_billing_data,
      business.id]
   );
   res.json({ saved: true });
@@ -809,20 +821,25 @@ async function processMessage(business, sessionId, message) {
     }
   }
 
-  // Guarda lo que Claude haya aprendido de este cliente (nombre, dirección), para no
-  // volver a preguntarlo en la próxima conversación o pedido.
+  // Guarda lo que Claude haya aprendido de este cliente (nombre, dirección, y si el negocio
+  // pide datos de facturación, también correo y RUT), para no volver a preguntarlo en la
+  // próxima conversación o pedido.
   if (parsedOrder) {
     const learnedName = parsedOrder.customer_name || null;
     const learnedAddress = (parsedOrder.delivery && parsedOrder.delivery.address) || null;
-    if (learnedName || learnedAddress) {
+    const learnedEmail = parsedOrder.customer_email || null;
+    const learnedRut = parsedOrder.customer_rut || null;
+    if (learnedName || learnedAddress || learnedEmail || learnedRut) {
       await pool.query(
-        `insert into customers (business_id, session_id, name, last_address)
-         values ($1, $2, $3, $4)
+        `insert into customers (business_id, session_id, name, last_address, email, rut)
+         values ($1, $2, $3, $4, $5, $6)
          on conflict (business_id, session_id) do update set
            name = coalesce(excluded.name, customers.name),
            last_address = coalesce(excluded.last_address, customers.last_address),
+           email = coalesce(excluded.email, customers.email),
+           rut = coalesce(excluded.rut, customers.rut),
            updated_at = now()`,
-        [business.id, sessionId, learnedName, learnedAddress]
+        [business.id, sessionId, learnedName, learnedAddress, learnedEmail, learnedRut]
       );
     }
   }
@@ -839,13 +856,16 @@ async function processMessage(business, sessionId, message) {
     const status = deriveOrderStatus(parsedOrder);
     const delivery = parsedOrder.delivery || {};
     const customerName = parsedOrder.customer_name || (customer && customer.name) || null;
+    const customerEmail = parsedOrder.customer_email || (customer && customer.email) || null;
+    const customerRut = parsedOrder.customer_rut || (customer && customer.rut) || null;
 
     if (latestOrder && !latestClosed) {
       const updated = await pool.query(
         `update orders set items=$1, total=$2, delivery_type=$3, delivery_address=$4, status=$5, customer_name=$6,
+         customer_email=$7, customer_rut=$8,
          confirmed_at = case when confirmed_at is null and $5 <> 'draft' then now() else confirmed_at end
-         where id=$7 returning *`,
-        [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, latestOrder.id]
+         where id=$9 returning *`,
+        [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, customerEmail, customerRut, latestOrder.id]
       );
       orderSnapshot = updated.rows[0];
     } else if ((!latestClosed || status === "draft") && (status !== "draft" || (parsedOrder.items || []).length > 0)) {
@@ -854,9 +874,9 @@ async function processMessage(business, sessionId, message) {
       // el último pedido ya se cerró y Claude sigue repitiendo un estado confirmado (porque no
       // sabe que se cerró), no se crea nada — evita duplicar el pedido que ya se pagó/canceló.
       const inserted = await pool.query(
-        `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, customer_name, confirmed_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8, case when $7 <> 'draft' then now() else null end) returning *`,
-        [business.id, conversation.id, JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName]
+        `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, customer_name, customer_email, customer_rut, confirmed_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, case when $7 <> 'draft' then now() else null end) returning *`,
+        [business.id, conversation.id, JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, customerEmail, customerRut]
       );
       orderSnapshot = inserted.rows[0];
     }
@@ -1022,14 +1042,14 @@ app.get("/api/business/:slug/customers", async (req, res) => {
   // dirección — antes de ese fix, un cliente que solo chateaba sin llegar a esa parte
   // no aparecía nunca en esta lista pese a tener conversación real.
   const { rows } = await pool.query(
-    `select conv.session_id, c.name, c.last_address,
+    `select conv.session_id, c.name, c.last_address, c.email, c.rut,
             coalesce(c.created_at, min(m.created_at)) as created_at,
             max(m.created_at) as last_message_at, count(m.id) as message_count
      from conversations conv
      left join customers c on c.business_id = conv.business_id and c.session_id = conv.session_id
      left join messages m on m.conversation_id = conv.id
      where conv.business_id = $1
-     group by conv.session_id, c.name, c.last_address, c.created_at
+     group by conv.session_id, c.name, c.last_address, c.email, c.rut, c.created_at
      order by last_message_at desc nulls last`,
     [business.id]
   );
