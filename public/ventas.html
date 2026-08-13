@@ -131,21 +131,11 @@
     </div>
 
     <div class="card">
-      <h2>Exportar pedidos a Google Sheets</h2>
-      <div id="googleNotConnected">
-        <p style="font-size:12.5px; color:var(--muted); margin:0 0 12px;">
-          Conecta tu cuenta de Google y te creamos automáticamente una planilla propia con tus pedidos, actualizada en vivo.
-        </p>
-        <button onclick="connectGoogle()">Conectar con Google</button>
-      </div>
-      <div id="googleConnected" style="display:none;">
-        <p style="font-size:12.5px; color:var(--muted); margin:0 0 6px;">Conectado como <b id="googleEmail"></b></p>
-        <a id="googleSheetLink" href="#" target="_blank" style="font-size:12.5px; color:var(--coral); font-weight:700;">Abrir mi planilla</a>
-        <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy); margin-top:14px;">
-          <input type="checkbox" id="googleSheetsEnabled" style="width:auto;" onchange="toggleGoogleSheets(this.checked)" /> Sincronizar pedidos automáticamente
-        </label>
-        <button class="small" style="margin-top:14px; background:#5C6B76;" onclick="disconnectGoogle()">Desconectar</button>
-      </div>
+      <h2>Exportar pedidos</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 12px;">
+        Descarga tus pedidos en un archivo que se abre directo en Excel u otra planilla.
+      </p>
+      <button onclick="exportOrdersToExcel()">Descargar pedidos (Excel)</button>
     </div>
 
     <div id="ordersList"></div>
@@ -452,7 +442,6 @@
   const BACKEND_URL = "https://pont-backend-production.up.railway.app";
   const BUSINESS_SLUG = new URLSearchParams(window.location.search).get("negocio") || "sodastream";
   document.getElementById("loginUsername").value = BUSINESS_SLUG;
-  const GOOGLE_CLIENT_ID = "40303689859-s37f3b57m4sv6ddbhflii0vsemtui575.apps.googleusercontent.com";
   const FACEBOOK_APP_ID = "tu-facebook-app-id";
   const FACEBOOK_CONFIG_ID = "tu-config-id-de-embedded-signup";
   // Sin logo de PONT por defecto: los <img> quedan vacíos hasta que el negocio suba el suyo propio.
@@ -705,30 +694,6 @@
     }
   }
 
-  function connectGoogle() {
-    const params = new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      redirect_uri: `${BACKEND_URL}/api/google/callback`,
-      response_type: "code",
-      scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email",
-      access_type: "offline",
-      prompt: "consent",
-      state: BUSINESS_SLUG,
-    });
-    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  }
-
-  async function disconnectGoogle() {
-    if (!confirm("¿Desconectar Google Sheets? Dejará de recibir pedidos nuevos, la planilla que ya tienes no se borra.")) return;
-    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/google/disconnect`, { method: "POST", headers: authHeaders() });
-    loadSettings();
-  }
-
-  async function toggleGoogleSheets(enabled) {
-    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/google/toggle`, {
-      method: "POST", headers: authHeaders(), body: JSON.stringify({ enabled }),
-    });
-  }
   let pauseSchedule = {};
   const DAYS = [
     ["mon", "Lunes"], ["tue", "Martes"], ["wed", "Miércoles"], ["thu", "Jueves"],
@@ -864,9 +829,44 @@
   }
 
   // ---- Pedidos ----
+  let lastLoadedOrders = [];
+
+  function csvEscape(value) {
+    return `"${String(value ?? "").replace(/"/g, '""')}"`;
+  }
+
+  // Genera un CSV con BOM UTF-8 (para que Excel muestre bien las tildes) y lo descarga —
+  // reemplaza a la sincronización con Google Sheets, que exigía verificación de marca de Google.
+  function exportOrdersToExcel() {
+    if (!lastLoadedOrders.length) { alert("No hay pedidos para exportar."); return; }
+    const headers = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
+    const rows = lastLoadedOrders.map((o) => {
+      const items = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
+      const delivery = o.delivery_type === "despacho" ? `Despacho: ${o.delivery_address || ""}` : (o.delivery_type === "retiro" ? "Retiro" : "");
+      return [
+        new Date(o.created_at).toLocaleString("es-CL"),
+        o.customer_name || "",
+        items,
+        o.total || 0,
+        delivery,
+        STATUS_LABEL[o.status] || o.status,
+        o.id,
+      ];
+    });
+    const csv = [headers, ...rows].map((r) => r.map(csvEscape).join(",")).join("\r\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pedidos-${BUSINESS_SLUG}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function loadOrders() {
     const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/orders`, { headers: authHeaders() });
     const orders = await res.json();
+    lastLoadedOrders = orders;
     const list = document.getElementById("ordersList");
     if (!orders.length) {
       list.innerHTML = '<div class="card" style="color:var(--muted); font-size:14px;">Todavía no hay pedidos.</div>';
@@ -1035,16 +1035,6 @@
       document.getElementById("whatsappPhoneId").value = data.whatsapp_phone_number_id || "";
       document.getElementById("whatsappAccessToken").value = data.whatsapp_access_token || "";
 
-      if (data.google_email) {
-        document.getElementById("googleNotConnected").style.display = "none";
-        document.getElementById("googleConnected").style.display = "block";
-        document.getElementById("googleEmail").textContent = data.google_email;
-        document.getElementById("googleSheetLink").href = data.google_spreadsheet_url || "#";
-        document.getElementById("googleSheetsEnabled").checked = !!data.google_sheets_enabled;
-      } else {
-        document.getElementById("googleNotConnected").style.display = "block";
-        document.getElementById("googleConnected").style.display = "none";
-      }
       document.getElementById("botPaused").checked = !!data.bot_paused;
       document.getElementById("pauseScheduleEnabled").checked = !!data.pause_schedule_enabled;
       document.getElementById("lowStockThreshold").value = data.low_stock_threshold === null || data.low_stock_threshold === undefined ? "" : data.low_stock_threshold;
@@ -1215,10 +1205,6 @@
   }
 
   (async () => {
-    const googleResult = new URLSearchParams(window.location.search).get("google");
-    if (googleResult === "connected") setTimeout(() => alert("¡Google Sheets conectado! Ya se creó tu planilla."), 300);
-    if (googleResult === "error") setTimeout(() => alert("No se pudo conectar con Google. Intenta de nuevo."), 300);
-
     // Si llegamos desde el panel de administrador, la clave de admin queda en localStorage
     // (no en la URL, para que no quede guardada en el historial del navegador ni en logs) —
     // la leemos una sola vez, la borramos de inmediato, y la usamos como si fuera la clave del negocio.

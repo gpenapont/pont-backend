@@ -53,8 +53,6 @@ const authRateLimit = rateLimit({
 // todas — protege ADMIN_PASSWORD, que funciona como llave maestra de toda la plataforma.
 app.use("/api/admin", authRateLimit);
 
-const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || "").trim();
-const GOOGLE_CLIENT_SECRET = (process.env.GOOGLE_CLIENT_SECRET || "").trim();
 const FACEBOOK_APP_ID = (process.env.FACEBOOK_APP_ID || "").trim();
 const FACEBOOK_APP_SECRET = (process.env.FACEBOOK_APP_SECRET || "").trim();
 const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || "").trim();
@@ -133,75 +131,6 @@ async function sendAbandonedCartAlertEmail(business, order) {
     const err = await res.text();
     throw new Error("Error de Resend: " + err);
   }
-}
-
-const SHEET_HEADERS = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
-
-// Cambia el refresh_token guardado por un access_token válido (dura 1 hora, así que se pide de nuevo cada vez).
-async function getGoogleAccessToken(business) {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      client_secret: GOOGLE_CLIENT_SECRET,
-      refresh_token: business.google_refresh_token,
-      grant_type: "refresh_token",
-    }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error("No se pudo refrescar el token de Google: " + JSON.stringify(data));
-  return data.access_token;
-}
-
-// Escribe o actualiza la fila de un pedido en la planilla del negocio. Nunca revienta el flujo
-// del chat si algo falla — se llama siempre "en paralelo", sin bloquear la respuesta al cliente.
-async function syncOrderToSheet(business, order) {
-  if (!business.google_sheets_enabled || !business.google_refresh_token || !business.google_spreadsheet_id) return;
-
-  const accessToken = await getGoogleAccessToken(business);
-  const sheetId = business.google_spreadsheet_id;
-  const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
-
-  // Busca si ya existe una fila para este pedido (columna G = ID Pedido).
-  const getRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Pedidos!G2:G10000`,
-    { headers }
-  );
-  const getData = await getRes.json();
-  const ids = (getData.values || []).map((r) => r[0]);
-  const rowIndex = ids.findIndex((id) => id === order.id);
-
-  const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
-  const entrega = order.delivery_type === "despacho" ? `Despacho: ${order.delivery_address || ""}` : (order.delivery_type === "retiro" ? "Retiro" : "");
-  const row = [
-    new Date(order.created_at || Date.now()).toLocaleString("es-CL"),
-    order.customer_name || "",
-    items,
-    order.total || 0,
-    entrega,
-    order.status,
-    order.id,
-  ];
-
-  if (rowIndex === -1) {
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Pedidos!A1:append?valueInputOption=USER_ENTERED`,
-      { method: "POST", headers, body: JSON.stringify({ values: [row] }) }
-    );
-  } else {
-    const sheetRow = rowIndex + 2; // +2: la fila 1 es encabezado, y los índices de Sheets empiezan en 1
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Pedidos!A${sheetRow}:G${sheetRow}?valueInputOption=USER_ENTERED`,
-      { method: "PUT", headers, body: JSON.stringify({ values: [row] }) }
-    );
-  }
-}
-
-// Nunca dejar que un problema con Sheets rompa el flujo real del pedido.
-function syncOrderToSheetSafe(business, order) {
-  if (!order) return;
-  syncOrderToSheet(business, order).catch((e) => console.error("Error sincronizando con Google Sheets:", e));
 }
 
 const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
@@ -560,9 +489,6 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     subscription_email: business.subscription_email,
     subscription_cancel_at_period_end: business.subscription_cancel_at_period_end,
     logo_data: business.logo_data,
-    google_sheets_enabled: business.google_sheets_enabled,
-    google_spreadsheet_url: business.google_spreadsheet_url,
-    google_email: business.google_email,
     bot_paused: business.bot_paused,
     pause_schedule_enabled: business.pause_schedule_enabled,
     pause_schedule: business.pause_schedule,
@@ -981,7 +907,6 @@ async function processMessage(business, sessionId, message) {
     replyText,
   ]);
 
-  syncOrderToSheetSafe(business, orderSnapshot);
   return { replyText, order: orderSnapshot, photos };
 }
 
@@ -1167,7 +1092,6 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
     status,
     req.params.orderId,
   ]);
-  syncOrderToSheetSafe(row, rows[0]);
 
   if (status === "pago_verificado" && row.previous_status !== "pago_verificado") {
     decrementStockForOrder(rows[0]).catch((e) => console.error("Error descontando stock:", e));
@@ -1191,12 +1115,10 @@ app.delete("/api/orders/:orderId", async (req, res) => {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
-  // No se borra de verdad: se marca como "eliminado", así el pedido nunca desaparece de golpe
-  // de un lado (el panel o la planilla) mientras sigue existiendo en el otro.
+  // No se borra de verdad: se marca como "eliminado", para no perder el historial del pedido.
   const { rows } = await pool.query("update orders set status = 'eliminado' where id = $1 returning *", [
     req.params.orderId,
   ]);
-  syncOrderToSheetSafe(row, rows[0]);
   res.json({ deleted: true });
 });
 
@@ -1414,98 +1336,6 @@ app.post("/api/whatsapp/webhook", async (req, res) => {
   } catch (err) {
     console.error("Error procesando webhook de WhatsApp:", err);
   }
-});
-
-// Google redirige aquí después de que el negocio autoriza el acceso. El "state" lleva el slug
-// del negocio (lo arma el propio panel al construir el link de autorización).
-app.get("/api/google/callback", async (req, res) => {
-  const { code, state, error } = req.query;
-  const slug = state;
-  const redirectBase = `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${slug}`;
-
-  if (error || !code) {
-    console.log("Google callback con error o sin code:", { error, hasCode: !!code, FRONTEND_APP_URL: process.env.FRONTEND_APP_URL });
-    return res.redirect(`${redirectBase}&google=error`);
-  }
-
-  try {
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        redirect_uri: `${PUBLIC_BACKEND_URL}/api/google/callback`,
-        grant_type: "authorization_code",
-      }),
-    });
-    const tokenData = await tokenRes.json();
-    if (!tokenRes.ok || !tokenData.refresh_token) {
-      console.error("Error obteniendo tokens de Google:", tokenData);
-      return res.redirect(`${redirectBase}&google=error`);
-    }
-
-    const userInfoRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
-    const userInfo = await userInfoRes.json();
-
-    // Crea una planilla nueva, ya con encabezados, en la cuenta de Drive del negocio.
-    const createRes = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${tokenData.access_token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        properties: { title: `Pedidos PONT` },
-        sheets: [{ properties: { title: "Pedidos" } }],
-      }),
-    });
-    const sheet = await createRes.json();
-    if (!createRes.ok || !sheet.spreadsheetId) {
-      console.error("Error creando la planilla de Google Sheets:", sheet);
-      return res.redirect(`${redirectBase}&google=error`);
-    }
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${sheet.spreadsheetId}/values/Pedidos!A1:G1?valueInputOption=USER_ENTERED`,
-      {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${tokenData.access_token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ values: [SHEET_HEADERS] }),
-      }
-    );
-
-    await pool.query(
-      `update businesses set google_refresh_token=$1, google_spreadsheet_id=$2, google_spreadsheet_url=$3,
-       google_email=$4, google_sheets_enabled=true where slug=$5`,
-      [tokenData.refresh_token, sheet.spreadsheetId, sheet.spreadsheetUrl, userInfo.email || null, slug]
-    );
-
-    res.redirect(`${redirectBase}&google=connected`);
-  } catch (e) {
-    console.error("Error en callback de Google:", e);
-    res.redirect(`${redirectBase}&google=error`);
-  }
-});
-
-// Desconectar Google Sheets de un negocio. Protegido con la clave del panel.
-app.post("/api/business/:slug/google/disconnect", async (req, res) => {
-  const business = await getBusinessWithAuth(req, res);
-  if (!business) return;
-  await pool.query(
-    `update businesses set google_refresh_token=null, google_spreadsheet_id=null, google_spreadsheet_url=null,
-     google_email=null, google_sheets_enabled=false where id=$1`,
-    [business.id]
-  );
-  res.json({ disconnected: true });
-});
-
-// Prender o apagar la sincronización sin desconectar la cuenta.
-app.post("/api/business/:slug/google/toggle", async (req, res) => {
-  const business = await getBusinessWithAuth(req, res);
-  if (!business) return;
-  const { enabled } = req.body;
-  await pool.query("update businesses set google_sheets_enabled=$1 where id=$2", [!!enabled, business.id]);
-  res.json({ saved: true });
 });
 
 // Termina la conexión de WhatsApp Embedded Signup: cambia el "code" que dio el navegador por un
@@ -1747,21 +1577,16 @@ app.delete("/api/admin/businesses/:slug", async (req, res) => {
 const PLAZO_TRANSFERENCIA_HORAS = 24;
 async function cancelarPedidosVencidos() {
   try {
-    const { rows } = await pool.query(
+    await pool.query(
       `update orders o set status = 'cancelado'
        from businesses b
        where o.business_id = b.id
          and o.status in ('confirmado', 'pago_avisado')
          and o.webpay_token is null
          and b.bank_account_number is not null
-         and o.confirmed_at < now() - interval '1 hour' * $1
-       returning o.*, b.id as biz_id`,
+         and o.confirmed_at < now() - interval '1 hour' * $1`,
       [PLAZO_TRANSFERENCIA_HORAS]
     );
-    for (const order of rows) {
-      const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
-      syncOrderToSheetSafe(bizRows[0], order);
-    }
   } catch (e) {
     console.error("Error cancelando pedidos vencidos por falta de pago:", e);
   }
@@ -1832,13 +1657,12 @@ async function eliminarCarritosAbandonados() {
       const business = bizRows[0];
       if (!business) continue;
 
-      const { rows: updated } = await pool.query("update orders set status = 'eliminado' where id = $1 returning *", [c.id]);
+      await pool.query("update orders set status = 'eliminado' where id = $1", [c.id]);
       await sendCustomerMessage(
         business,
         c.conversation_id,
         "Este pedido se eliminó automáticamente porque no se confirmó dentro de las 24 horas. Si todavía quieres hacerlo, dime y lo armamos de nuevo."
       );
-      syncOrderToSheetSafe(business, updated[0]);
     }
   } catch (e) {
     console.error("Error eliminando carritos abandonados:", e);
@@ -1885,6 +1709,4 @@ alertarCarritosAbandonados();
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`PONT backend escuchando en :${port}`);
-  console.log(`GOOGLE_CLIENT_ID cargado: ${GOOGLE_CLIENT_ID ? "sí (" + GOOGLE_CLIENT_ID.length + " caracteres)" : "NO"}`);
-  console.log(`GOOGLE_CLIENT_SECRET cargado: ${GOOGLE_CLIENT_SECRET ? "sí (" + GOOGLE_CLIENT_SECRET.length + " caracteres)" : "NO"}`);
 });
