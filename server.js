@@ -557,6 +557,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     mp_checkout_url: business.mp_checkout_url,
     subscription_billing_name: business.subscription_billing_name,
     subscription_billing_rut: business.subscription_billing_rut,
+    subscription_email: business.subscription_email,
     subscription_cancel_at_period_end: business.subscription_cancel_at_period_end,
     logo_data: business.logo_data,
     google_sheets_enabled: business.google_sheets_enabled,
@@ -1588,6 +1589,24 @@ app.post("/api/business/:slug/subscription/create", async (req, res) => {
     console.error("Error creando suscripción:", e);
     res.status(500).json({ error: "Error interno" });
   }
+});
+
+// Permite corregir el nombre/razón social, RUT o correo de facturación de una suscripción ya
+// creada, sin volver a pasar por el flujo de checkout de Mercado Pago.
+app.put("/api/business/:slug/subscription/billing", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  const { billing_name, billing_rut, email } = req.body;
+  if (!billing_name || !billing_rut || !email) {
+    return res.status(400).json({ error: "Falta el nombre o razón social, el RUT o el correo" });
+  }
+
+  await pool.query(
+    "update businesses set subscription_billing_name=$1, subscription_billing_rut=$2, subscription_email=$3 where id=$4",
+    [billing_name.trim(), billing_rut.trim(), email.trim(), business.id]
+  );
+  res.json({ updated: true });
 });
 
 // Programa (o deshace) la baja de la suscripción para la próxima fecha de renovación — no cancela

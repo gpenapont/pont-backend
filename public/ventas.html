@@ -419,6 +419,28 @@
         <div class="save-row"><button onclick="startSubscription('Reactivate')">Reactivar suscripción ($5.000 + IVA/mes)</button></div>
       </div>
     </div>
+
+    <div class="card" id="billingInfoCard" style="display:none;">
+      <h2>Datos de facturación</h2>
+      <div id="billingView">
+        <p style="font-size:12.5px; color:var(--muted); margin:0;">Nombre o razón social: <b id="billingViewName">—</b></p>
+        <p style="font-size:12.5px; color:var(--muted); margin:2px 0 0;">RUT: <b id="billingViewRut">—</b></p>
+        <p style="font-size:12.5px; color:var(--muted); margin:2px 0 0;">Correo: <b id="billingViewEmail">—</b></p>
+        <div class="save-row"><button style="background:var(--muted);" onclick="toggleBillingEdit(true)">Editar</button></div>
+      </div>
+      <div id="billingEdit" style="display:none;">
+        <label>Nombre o razón social</label>
+        <input id="billingEditName" placeholder="Ej: Panadería Los Aromos SpA" />
+        <label>RUT</label>
+        <input id="billingEditRut" placeholder="Ej: 12.345.678-9" />
+        <label>Correo</label>
+        <input id="billingEditEmail" placeholder="tu@correo.cl" />
+        <div class="save-row">
+          <button onclick="saveBillingInfo()">Guardar</button>
+          <button style="background:var(--muted);" onclick="toggleBillingEdit(false)">Cancelar</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -549,6 +571,37 @@
     } else {
       document.getElementById("subInactive").style.display = "block";
     }
+  }
+
+  function renderBillingInfo(billingName, billingRut, email) {
+    const hasBilling = !!(billingName || billingRut || email);
+    document.getElementById("billingInfoCard").style.display = hasBilling ? "block" : "none";
+    document.getElementById("billingViewName").textContent = billingName || "—";
+    document.getElementById("billingViewRut").textContent = billingRut || "—";
+    document.getElementById("billingViewEmail").textContent = email || "—";
+    document.getElementById("billingEditName").value = billingName || "";
+    document.getElementById("billingEditRut").value = billingRut || "";
+    document.getElementById("billingEditEmail").value = email || "";
+  }
+
+  function toggleBillingEdit(edit) {
+    document.getElementById("billingView").style.display = edit ? "none" : "block";
+    document.getElementById("billingEdit").style.display = edit ? "block" : "none";
+  }
+
+  async function saveBillingInfo() {
+    const billingName = document.getElementById("billingEditName").value.trim();
+    const billingRut = document.getElementById("billingEditRut").value.trim();
+    const email = document.getElementById("billingEditEmail").value.trim();
+    if (!billingName || !billingRut || !email) { alert("Completa nombre o razón social, RUT y correo."); return; }
+    const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/subscription/billing`, {
+      method: "PUT",
+      headers: authHeaders(),
+      body: JSON.stringify({ billing_name: billingName, billing_rut: billingRut, email }),
+    });
+    if (!res.ok) { alert("No se pudieron guardar los datos de facturación."); return; }
+    toggleBillingEdit(false);
+    loadSettings();
   }
 
   async function startSubscription(suffix) {
@@ -964,6 +1017,7 @@
       document.getElementById("bizTitle").textContent = data.name || BUSINESS_SLUG;
       document.getElementById("greeting").value = data.greeting || "";
       renderSubscription(data.subscription_status, data.mp_checkout_url, data.last_payment_date, data.subscription_cancel_at_period_end);
+      renderBillingInfo(data.subscription_billing_name, data.subscription_billing_rut, data.subscription_email);
       if (data.logo_data) {
         const preview = document.getElementById("logoPreview");
         preview.src = data.logo_data;
