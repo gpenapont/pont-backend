@@ -895,7 +895,7 @@
       const c = STATUS_COLOR[o.status] || STATUS_COLOR.draft;
       return `
         <div class="card">
-          <div class="order-row">
+          <div class="order-row" style="align-items:stretch;">
             <div style="flex:0 0 33%; min-width:0;">
               ${o.customer_name ? `<div style="font-weight:700; font-size:13.5px; color:var(--navy);">${escapeHtml(o.customer_name)}</div>` : ""}
               <div class="order-items">${items}</div>
@@ -904,9 +904,10 @@
               <div class="order-meta">${new Date(o.created_at).toLocaleString("es-CL")}</div>
               <select style="margin-top:8px; background:${c.bg}; color:${c.fg}; border-color:${c.fg};" onchange="changeStatus('${o.id}', this.value)">${statusOptions}</select>
             </div>
-            <div style="flex:0 0 33%; min-width:0; text-align:right;">
-              ${o.customer_email || o.customer_rut ? `<div class="order-meta">${[o.customer_email ? escapeHtml(o.customer_email) : null, o.customer_rut ? escapeHtml(o.customer_rut) : null].filter(Boolean).join(" · ")}</div>` : ""}
-              <button class="small" style="margin-top:8px; background:${o.invoice_status === "emitida" ? "var(--mint)" : "#5C6B76"}; color:${o.invoice_status === "emitida" ? "var(--navy)" : "#fff"};" onclick="toggleInvoiceStatus('${o.id}', '${o.invoice_status === "emitida" ? "pendiente" : "emitida"}')">${o.invoice_status === "emitida" ? "✓ Boleta/factura emitida" : "Marcar boleta/factura emitida"}</button>
+            <div style="flex:0 0 33%; min-width:0; text-align:right; display:flex; flex-direction:column; align-items:flex-end;">
+              ${o.customer_email ? `<div class="order-meta">Correo: ${escapeHtml(o.customer_email)}</div>` : ""}
+              ${o.customer_rut ? `<div class="order-meta">RUT: ${escapeHtml(o.customer_rut)}</div>` : ""}
+              <button class="small" style="margin-top:auto; background:${o.invoice_status === "emitida" ? "var(--mint)" : "#5C6B76"}; color:${o.invoice_status === "emitida" ? "var(--navy)" : "#fff"};" onclick="toggleInvoiceStatus('${o.id}', '${o.invoice_status === "emitida" ? "pendiente" : "emitida"}')">${o.invoice_status === "emitida" ? "✓ Boleta/factura emitida" : "Marcar boleta/factura emitida"}</button>
             </div>
             <div>
               <button class="small" style="background:#5C6B76" onclick="deleteOrder('${o.id}')">Eliminar</button>
