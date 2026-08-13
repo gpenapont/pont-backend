@@ -850,17 +850,20 @@
   // reemplaza a la sincronización con Google Sheets, que exigía verificación de marca de Google.
   function exportOrdersToExcel() {
     if (!lastLoadedOrders.length) { alert("No hay pedidos para exportar."); return; }
-    const headers = ["Fecha", "Cliente", "Productos", "Total", "Entrega", "Estado", "ID Pedido"];
+    const headers = ["Fecha", "Cliente", "Correo", "RUT", "Productos", "Total", "Entrega", "Estado", "Boleta/Factura", "ID Pedido"];
     const rows = lastLoadedOrders.map((o) => {
       const items = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
       const delivery = o.delivery_type === "despacho" ? `Despacho: ${o.delivery_address || ""}` : (o.delivery_type === "retiro" ? "Retiro" : "");
       return [
         new Date(o.created_at).toLocaleString("es-CL"),
         o.customer_name || "",
+        o.customer_email || "",
+        o.customer_rut || "",
         items,
         o.total || 0,
         delivery,
         STATUS_LABEL[o.status] || o.status,
+        o.invoice_status === "emitida" ? "Emitida" : "Pendiente",
         o.id,
       ];
     });
@@ -895,6 +898,7 @@
           <div class="order-row">
             <div>
               ${o.customer_name ? `<div style="font-weight:700; font-size:13.5px; color:var(--navy);">${escapeHtml(o.customer_name)}</div>` : ""}
+              ${o.customer_email || o.customer_rut ? `<div class="order-meta">${[o.customer_email ? escapeHtml(o.customer_email) : null, o.customer_rut ? escapeHtml(o.customer_rut) : null].filter(Boolean).join(" · ")}</div>` : ""}
               <div class="order-items">${items}</div>
               <div class="order-total">${fmt(o.total)}</div>
               <div class="order-meta">${delivery}</div>
@@ -902,6 +906,7 @@
             </div>
             <div style="text-align:right;">
               <select style="background:${c.bg}; color:${c.fg}; border-color:${c.fg};" onchange="changeStatus('${o.id}', this.value)">${statusOptions}</select><br/>
+              <button class="small" style="margin-top:8px; background:${o.invoice_status === "emitida" ? "var(--mint)" : "#5C6B76"}; color:${o.invoice_status === "emitida" ? "var(--navy)" : "#fff"};" onclick="toggleInvoiceStatus('${o.id}', '${o.invoice_status === "emitida" ? "pendiente" : "emitida"}')">${o.invoice_status === "emitida" ? "✓ Boleta/factura emitida" : "Marcar boleta/factura emitida"}</button><br/>
               <button class="small" style="margin-top:8px; background:#5C6B76" onclick="deleteOrder('${o.id}')">Eliminar</button>
             </div>
           </div>
@@ -1009,6 +1014,13 @@
   async function changeStatus(orderId, status) {
     await fetch(`${BACKEND_URL}/api/orders/${orderId}/status`, {
       method: "PATCH", headers: authHeaders(), body: JSON.stringify({ status }),
+    });
+    loadOrders();
+  }
+
+  async function toggleInvoiceStatus(orderId, invoice_status) {
+    await fetch(`${BACKEND_URL}/api/orders/${orderId}/invoice-status`, {
+      method: "PATCH", headers: authHeaders(), body: JSON.stringify({ invoice_status }),
     });
     loadOrders();
   }

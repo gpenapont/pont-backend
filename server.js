@@ -1122,6 +1122,29 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
   res.json(rows[0]);
 });
 
+// El negocio marca a mano si ya emitió la boleta/factura de un pedido puntual (con los datos
+// que el cliente dio al confirmar, si el negocio los pidió). Es independiente del estado del
+// pedido — un pedido puede estar pagado y aun así seguir con la boleta pendiente. Misma clave.
+app.patch("/api/orders/:orderId/invoice-status", async (req, res) => {
+  const { invoice_status } = req.body; // 'pendiente' | 'emitida'
+  const { rows: orderRows } = await pool.query(
+    "select o.id, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
+    [req.params.orderId]
+  );
+  const row = orderRows[0];
+  if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
+  const isAdminInvoice = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
+  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password && !isAdminInvoice) {
+    return res.status(401).json({ error: "Clave incorrecta" });
+  }
+
+  const { rows } = await pool.query("update orders set invoice_status = $1 where id = $2 returning *", [
+    invoice_status === "emitida" ? "emitida" : "pendiente",
+    req.params.orderId,
+  ]);
+  res.json(rows[0]);
+});
+
 // El negocio elimina un pedido por completo (por ejemplo, un pedido de prueba o duplicado). Misma clave.
 app.delete("/api/orders/:orderId", async (req, res) => {
   const { rows: orderRows } = await pool.query(
