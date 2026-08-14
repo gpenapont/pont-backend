@@ -231,6 +231,20 @@
     </div>
 
     <div class="card">
+      <h2>Avisos por correo</h2>
+      <label>Correo verificado de tu cuenta</label>
+      <input id="accountEmail" readonly disabled style="background:var(--gray); color:var(--muted);" />
+      <p style="font-size:12.5px; color:var(--muted); margin:8px 0 10px;">A ese correo llegan los avisos de abajo. Ambos quedan activados por defecto al crear la cuenta.</p>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
+        <input type="checkbox" id="newOrdersAlertEnabled" style="width:auto;" /> Avisarme cuando tenga pedidos nuevos (lunes a viernes, 7am y 14:00)
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy); margin-top:10px;">
+        <input type="checkbox" id="abandonedCartAlertEnabled" style="width:auto;" /> Avisarme cuando un cliente deje un carrito abandonado
+      </label>
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
+    </div>
+
+    <div class="card">
       <h2>Alerta de stock bajo</h2>
       <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Avísame en el panel cuando a algún producto (con stock activado en Catálogo) le queden pocas unidades. Déjalo vacío para desactivar el aviso.</p>
       <label>Avisarme cuando queden menos de</label>
@@ -1088,6 +1102,9 @@
       document.getElementById("deliveryEnabled").checked = data.delivery_enabled !== false;
       document.getElementById("deliveryRules").value = data.delivery_rules || "";
       document.getElementById("askBillingData").checked = !!data.ask_billing_data;
+      document.getElementById("accountEmail").value = data.email || "";
+      document.getElementById("newOrdersAlertEnabled").checked = data.new_orders_alert_enabled !== false;
+      document.getElementById("abandonedCartAlertEnabled").checked = data.abandoned_cart_alert_enabled !== false;
       pauseSchedule = data.pause_schedule || {};
       renderSchedule();
       currentItems = data.menuItems || [];
@@ -1124,6 +1141,8 @@
         delivery_rules: document.getElementById("deliveryRules").value,
         low_stock_threshold: document.getElementById("lowStockThreshold").value,
         ask_billing_data: document.getElementById("askBillingData").checked,
+        new_orders_alert_enabled: document.getElementById("newOrdersAlertEnabled").checked,
+        abandoned_cart_alert_enabled: document.getElementById("abandonedCartAlertEnabled").checked,
       }),
     });
     const row = event && event.target ? event.target.closest(".save-row") : null;

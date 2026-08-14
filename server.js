@@ -547,6 +547,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
   );
   res.json({
     name: business.name,
+    email: business.email,
     greeting: business.greeting,
     system_prompt_extra: business.system_prompt_extra,
     bank_name: business.bank_name,
@@ -576,6 +577,8 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     delivery_rules: business.delivery_rules,
     low_stock_threshold: business.low_stock_threshold,
     ask_billing_data: business.ask_billing_data,
+    new_orders_alert_enabled: business.new_orders_alert_enabled !== false,
+    abandoned_cart_alert_enabled: business.abandoned_cart_alert_enabled !== false,
     menuItems,
   });
 });
@@ -617,21 +620,22 @@ app.put("/api/business/:slug/settings", async (req, res) => {
     bot_paused, pause_schedule_enabled, pause_schedule,
     pickup_enabled, pickup_address, delivery_enabled, delivery_rules,
     low_stock_threshold, ask_billing_data,
+    new_orders_alert_enabled, abandoned_cart_alert_enabled,
   } = req.body;
   await pool.query(
     `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
      bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10,
      whatsapp_phone_number_id=$11, whatsapp_access_token=$12, bot_paused=$13, pause_schedule_enabled=$14, pause_schedule=$15,
      pickup_enabled=$16, pickup_address=$17, delivery_enabled=$18, delivery_rules=$19, low_stock_threshold=$20,
-     ask_billing_data=$21
-     where id=$22`,
+     ask_billing_data=$21, new_orders_alert_enabled=$22, abandoned_cart_alert_enabled=$23
+     where id=$24`,
     [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
      !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null,
      whatsapp_phone_number_id || null, whatsapp_access_token || null,
      !!bot_paused, !!pause_schedule_enabled, JSON.stringify(pause_schedule || {}),
      !!pickup_enabled, pickup_address || null, !!delivery_enabled, delivery_rules || null,
      low_stock_threshold === "" || low_stock_threshold === undefined || low_stock_threshold === null ? null : Number(low_stock_threshold),
-     !!ask_billing_data,
+     !!ask_billing_data, !!new_orders_alert_enabled, !!abandoned_cart_alert_enabled,
      business.id]
   );
   res.json({ saved: true });
@@ -1805,7 +1809,7 @@ async function alertarCarritosAbandonados() {
     for (const order of candidates) {
       const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
       const business = bizRows[0];
-      if (!business || !business.email) continue;
+      if (!business || !business.email || business.abandoned_cart_alert_enabled === false) continue;
 
       try {
         await sendAbandonedCartAlertEmail(business, order);
@@ -1844,7 +1848,7 @@ async function alertarPedidosNuevos() {
     lastOrdersAlertSlot = slot;
 
     const { rows: businesses } = await pool.query(
-      "select id, slug, name, email, last_orders_alert_at from businesses where email is not null and email_verified = true"
+      "select id, slug, name, email, last_orders_alert_at from businesses where email is not null and email_verified = true and new_orders_alert_enabled = true"
     );
 
     for (const business of businesses) {
