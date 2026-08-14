@@ -54,7 +54,7 @@
   .order-total { font-family: 'Poppins', sans-serif; font-weight: 700; }
   .order-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
-  .customer-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--gray); cursor: pointer; }
+  .customer-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--gray); cursor: pointer; }
   .customer-row:last-child { border-bottom: none; }
   .customer-row:hover { background: var(--gray); }
   .customer-name { font-weight: 700; font-size: 13.5px; color: var(--navy); }
@@ -975,12 +975,12 @@
     }
     list.innerHTML = customers.map((c) => `
       <div class="customer-row" data-session-id="${escapeHtml(c.session_id)}" data-name="${escapeHtml(c.name || "Cliente sin nombre")}" data-address="${escapeHtml(c.last_address || "")}">
-        <div>
+        <div style="flex:1; min-width:0;">
           <div class="customer-name">${escapeHtml(c.name || "Cliente sin nombre")}</div>
           ${c.last_address ? `<div class="customer-address">${escapeHtml(c.last_address)}</div>` : ""}
           ${c.email || c.rut ? `<div class="customer-address">${[c.email ? escapeHtml(c.email) : null, c.rut ? escapeHtml(c.rut) : null].filter(Boolean).join(" · ")}</div>` : ""}
         </div>
-        <div class="customer-meta">
+        <div class="customer-meta" style="flex:0 0 150px;">
           ${c.last_message_at ? new Date(c.last_message_at).toLocaleString("es-CL") : ""}<br/>
           ${c.message_count || 0} mensaje${c.message_count == 1 ? "" : "s"}
         </div>
