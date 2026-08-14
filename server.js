@@ -456,7 +456,9 @@ async function getBusinessWithAuth(req, res) {
     return null;
   }
   const isAdmin = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
-  if (business.dashboard_password && req.headers["x-dashboard-key"] !== business.dashboard_password && !isAdmin) {
+  // "Fail closed": si por lo que sea la fila no tiene clave guardada, se rechaza igual en vez de
+  // dejar el negocio abierto sin clave (antes bastaba con no mandar el header para pasar).
+  if (!isAdmin && (!business.dashboard_password || req.headers["x-dashboard-key"] !== business.dashboard_password)) {
     res.status(401).json({ error: "Clave incorrecta" });
     return null;
   }
@@ -518,7 +520,11 @@ app.get("/api/business/:slug/settings", async (req, res) => {
 const SAFE_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 function isSafeImageDataUri(dataUri) {
   if (!dataUri) return true; // vacío = se está borrando la imagen, no hay nada que validar
-  const match = dataUri.match(/^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+);base64,/);
+  // La regex ancla también el final (no solo el inicio) y exige que TODO el resto del string
+  // sea base64 válido — si solo ancláramos el inicio, alguien podría mandar
+  // "data:image/png;base64,x" onerror="..." y quedaría "válido" para esta función pese a traer
+  // HTML/JS pegado atrás, que después se inyecta sin escapar en el chat público (index.html).
+  const match = dataUri.match(/^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+);base64,[A-Za-z0-9+/]+=*$/);
   return !!match && SAFE_IMAGE_TYPES.includes(match[1].toLowerCase());
 }
 
@@ -957,7 +963,7 @@ app.get("/api/business/:slug/orders", async (req, res) => {
   const biz = bizRows[0];
   if (!biz) return res.status(404).json({ error: "Negocio no encontrado" });
   const isAdminOrders = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
-  if (biz.dashboard_password && req.headers["x-dashboard-key"] !== biz.dashboard_password && !isAdminOrders) {
+  if (!isAdminOrders && (!biz.dashboard_password || req.headers["x-dashboard-key"] !== biz.dashboard_password)) {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
@@ -1104,7 +1110,7 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
   const row = orderRows[0];
   if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
   const isAdminStatus = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
-  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password && !isAdminStatus) {
+  if (!isAdminStatus && (!row.dashboard_password || req.headers["x-dashboard-key"] !== row.dashboard_password)) {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
@@ -1134,7 +1140,7 @@ app.patch("/api/orders/:orderId/invoice-status", async (req, res) => {
   const row = orderRows[0];
   if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
   const isAdminInvoice = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
-  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password && !isAdminInvoice) {
+  if (!isAdminInvoice && (!row.dashboard_password || req.headers["x-dashboard-key"] !== row.dashboard_password)) {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 
@@ -1154,7 +1160,7 @@ app.delete("/api/orders/:orderId", async (req, res) => {
   const row = orderRows[0];
   if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
   const isAdminDelete = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
-  if (row.dashboard_password && req.headers["x-dashboard-key"] !== row.dashboard_password && !isAdminDelete) {
+  if (!isAdminDelete && (!row.dashboard_password || req.headers["x-dashboard-key"] !== row.dashboard_password)) {
     return res.status(401).json({ error: "Clave incorrecta" });
   }
 

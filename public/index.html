@@ -284,7 +284,12 @@
       const biz = await bizRes.json();
       document.getElementById("bizName").textContent = biz.name || BUSINESS_SLUG;
       if (biz.logoData) {
-        document.getElementById("avatar").innerHTML = `<img src="${biz.logoData}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`;
+        const avatar = document.getElementById("avatar");
+        avatar.textContent = "";
+        const logoImg = document.createElement("img");
+        logoImg.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:50%;";
+        logoImg.src = biz.logoData; // asignado como propiedad del DOM, no como HTML, para que un logo_data
+        avatar.appendChild(logoImg); // malicioso no pueda inyectar markup/JS (ver auditoría de seguridad)
       } else {
         document.getElementById("avatar").textContent = (biz.name || "?").charAt(0).toUpperCase();
       }
