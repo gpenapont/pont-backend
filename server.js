@@ -152,7 +152,20 @@ async function sendPasswordResetEmail(email, businessName, slug, token) {
   }
 }
 
-async function sendAbandonedCartAlertEmail(business, order) {
+// Junta el correo verificado de la cuenta (si el negocio no lo desactivó) con los correos
+// adicionales que haya cargado en "Avisos por correo" — usado tanto para pedidos nuevos como
+// para carritos abandonados, para no repetir esta lógica en cada función de envío.
+function getAlertRecipients(business) {
+  const recipients = [];
+  if (business.send_alerts_to_account_email !== false && business.email) recipients.push(business.email);
+  const extra = (business.alert_emails || "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean);
+  return Array.from(new Set([...recipients, ...extra]));
+}
+
+async function sendAbandonedCartAlertEmail(business, order, recipients) {
   const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ") || "sin detalle";
   const ventasUrl = `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${business.slug}`;
   const res = await fetch("https://api.resend.com/emails", {
@@ -160,7 +173,7 @@ async function sendAbandonedCartAlertEmail(business, order) {
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       from: RESEND_FROM,
-      to: business.email,
+      to: recipients,
       subject: "Un cliente dejó un carrito abandonado en TeVende",
       html: `
         <p>Hola,</p>
@@ -177,14 +190,14 @@ async function sendAbandonedCartAlertEmail(business, order) {
   }
 }
 
-async function sendNewOrdersAlertEmail(business) {
+async function sendNewOrdersAlertEmail(business, recipients) {
   const ventasUrl = `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${business.slug}`;
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       from: RESEND_FROM,
-      to: business.email,
+      to: recipients,
       subject: "Tienes pedidos nuevos en TeVende",
       html: `
         <p>Hola,</p>
@@ -579,6 +592,8 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     ask_billing_data: business.ask_billing_data,
     new_orders_alert_enabled: business.new_orders_alert_enabled !== false,
     abandoned_cart_alert_enabled: business.abandoned_cart_alert_enabled !== false,
+    send_alerts_to_account_email: business.send_alerts_to_account_email !== false,
+    alert_emails: business.alert_emails,
     menuItems,
   });
 });
@@ -621,14 +636,23 @@ app.put("/api/business/:slug/settings", async (req, res) => {
     pickup_enabled, pickup_address, delivery_enabled, delivery_rules,
     low_stock_threshold, ask_billing_data,
     new_orders_alert_enabled, abandoned_cart_alert_enabled,
+    send_alerts_to_account_email, alert_emails,
   } = req.body;
+  // Limpia la lista de correos adicionales: quita espacios y entradas vacías, pero no valida
+  // formato estricto — si el negocio escribe algo mal, Resend simplemente rechaza ese envío.
+  const cleanedAlertEmails = (alert_emails || "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean)
+    .join(", ");
   await pool.query(
     `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
      bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10,
      whatsapp_phone_number_id=$11, whatsapp_access_token=$12, bot_paused=$13, pause_schedule_enabled=$14, pause_schedule=$15,
      pickup_enabled=$16, pickup_address=$17, delivery_enabled=$18, delivery_rules=$19, low_stock_threshold=$20,
-     ask_billing_data=$21, new_orders_alert_enabled=$22, abandoned_cart_alert_enabled=$23
-     where id=$24`,
+     ask_billing_data=$21, new_orders_alert_enabled=$22, abandoned_cart_alert_enabled=$23,
+     send_alerts_to_account_email=$24, alert_emails=$25
+     where id=$26`,
     [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
      !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null,
      whatsapp_phone_number_id || null, whatsapp_access_token || null,
@@ -636,6 +660,7 @@ app.put("/api/business/:slug/settings", async (req, res) => {
      !!pickup_enabled, pickup_address || null, !!delivery_enabled, delivery_rules || null,
      low_stock_threshold === "" || low_stock_threshold === undefined || low_stock_threshold === null ? null : Number(low_stock_threshold),
      !!ask_billing_data, !!new_orders_alert_enabled, !!abandoned_cart_alert_enabled,
+     !!send_alerts_to_account_email, cleanedAlertEmails || null,
      business.id]
   );
   res.json({ saved: true });
@@ -1809,10 +1834,12 @@ async function alertarCarritosAbandonados() {
     for (const order of candidates) {
       const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
       const business = bizRows[0];
-      if (!business || !business.email || business.abandoned_cart_alert_enabled === false) continue;
+      if (!business || business.abandoned_cart_alert_enabled === false) continue;
+      const recipients = getAlertRecipients(business);
+      if (recipients.length === 0) continue;
 
       try {
-        await sendAbandonedCartAlertEmail(business, order);
+        await sendAbandonedCartAlertEmail(business, order, recipients);
       } catch (e) {
         console.error("Error enviando alerta de carrito abandonado:", e);
         continue;
@@ -1848,7 +1875,8 @@ async function alertarPedidosNuevos() {
     lastOrdersAlertSlot = slot;
 
     const { rows: businesses } = await pool.query(
-      "select id, slug, name, email, last_orders_alert_at from businesses where email is not null and email_verified = true and new_orders_alert_enabled = true"
+      `select id, slug, name, email, last_orders_alert_at, alert_emails, send_alerts_to_account_email
+       from businesses where email_verified = true and new_orders_alert_enabled = true`
     );
 
     for (const business of businesses) {
@@ -1858,10 +1886,13 @@ async function alertarPedidosNuevos() {
         [business.id, since]
       );
       if (rows[0].count > 0) {
-        try {
-          await sendNewOrdersAlertEmail(business);
-        } catch (e) {
-          console.error("Error enviando alerta de pedidos nuevos:", e);
+        const recipients = getAlertRecipients(business);
+        if (recipients.length > 0) {
+          try {
+            await sendNewOrdersAlertEmail(business, recipients);
+          } catch (e) {
+            console.error("Error enviando alerta de pedidos nuevos:", e);
+          }
         }
       }
       await pool.query("update businesses set last_orders_alert_at = now() where id = $1", [business.id]);

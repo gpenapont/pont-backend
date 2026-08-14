@@ -234,7 +234,12 @@
       <h2>Avisos por correo</h2>
       <label>Correo verificado de tu cuenta</label>
       <input id="accountEmail" readonly disabled style="background:var(--gray); color:var(--muted);" />
-      <p style="font-size:12.5px; color:var(--muted); margin:8px 0 10px;">A ese correo llegan los avisos de abajo. Ambos quedan activados por defecto al crear la cuenta.</p>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy); margin-top:10px;">
+        <input type="checkbox" id="sendAlertsToAccountEmail" style="width:auto;" /> Enviar los avisos también a este correo
+      </label>
+      <label style="margin-top:14px;">Correos adicionales</label>
+      <input id="alertEmails" placeholder="Separados por coma, ej: socio@correo.cl, contador@correo.cl" />
+      <p style="font-size:12.5px; color:var(--muted); margin:8px 0 10px;">A los correos de arriba llegan los avisos de abajo. Ambos quedan activados por defecto al crear la cuenta.</p>
       <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
         <input type="checkbox" id="newOrdersAlertEnabled" style="width:auto;" /> Avisarme cuando tenga pedidos nuevos (lunes a viernes, 7am y 14:00)
       </label>
@@ -1103,6 +1108,8 @@
       document.getElementById("deliveryRules").value = data.delivery_rules || "";
       document.getElementById("askBillingData").checked = !!data.ask_billing_data;
       document.getElementById("accountEmail").value = data.email || "";
+      document.getElementById("sendAlertsToAccountEmail").checked = data.send_alerts_to_account_email !== false;
+      document.getElementById("alertEmails").value = data.alert_emails || "";
       document.getElementById("newOrdersAlertEnabled").checked = data.new_orders_alert_enabled !== false;
       document.getElementById("abandonedCartAlertEnabled").checked = data.abandoned_cart_alert_enabled !== false;
       pauseSchedule = data.pause_schedule || {};
@@ -1143,6 +1150,8 @@
         ask_billing_data: document.getElementById("askBillingData").checked,
         new_orders_alert_enabled: document.getElementById("newOrdersAlertEnabled").checked,
         abandoned_cart_alert_enabled: document.getElementById("abandonedCartAlertEnabled").checked,
+        send_alerts_to_account_email: document.getElementById("sendAlertsToAccountEmail").checked,
+        alert_emails: document.getElementById("alertEmails").value,
       }),
     });
     const row = event && event.target ? event.target.closest(".save-row") : null;
