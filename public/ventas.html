@@ -144,8 +144,13 @@
   <!-- CONFIGURACIÓN -->
   <div class="tab-panel" id="panelConfig">
     <div class="card">
-      <h2>Tu agente</h2>
-      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Comparte este link o el código QR para que tus clientes lleguen directo al chat.</p>
+      <h2 style="display:flex; align-items:center; gap:8px;">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#29ABE2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        Tu agente
+      </h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px; line-height:1.5;">
+        Si no quieres vender por WhatsApp, descarga este código QR o comparte el link para que tus clientes lleguen directo a tu agente por la web — se ve y conversa parecido a un WhatsApp, pero es un chat propio que no depende de tener WhatsApp conectado. Si prefieres usar tu WhatsApp, configúralo más abajo.
+      </p>
       <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
         <div>
           <img id="agentQr" style="width:130px; height:130px; border-radius:8px; border:1.5px solid var(--gray); display:block;" alt="Código QR del agente" />
@@ -156,6 +161,27 @@
           <button class="small" onclick="copyAgentLink()">Copiar link</button>
         </div>
       </div>
+    </div>
+
+    <div class="card">
+      <h2 style="display:flex; align-items:center; gap:8px;">
+        <svg width="19" height="19" viewBox="0 0 24 24" aria-hidden="true"><path fill="#25D366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path fill="#25D366" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 2.09.55 4.06 1.6 5.8L2 22l4.44-1.66a9.86 9.86 0 0 0 5.6 1.73h.01c5.46 0 9.91-4.45 9.91-9.91C21.96 6.45 17.51 2 12.04 2zm0 18.05h-.01a8.24 8.24 0 0 1-4.6-1.35l-.33-.2-3.42 1.28.91-3.33-.22-.34a8.24 8.24 0 0 1-1.26-4.4c0-4.55 3.71-8.26 8.27-8.26 4.55 0 8.26 3.71 8.26 8.26 0 4.56-3.71 8.34-8.6 8.34z"/></svg>
+        WhatsApp
+      </h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 12px; line-height:1.5;">
+        Conecta tu número de <b>WhatsApp Business</b> (la app de WhatsApp para negocios, no tu WhatsApp personal) — inicias sesión con tu propio Facebook y quedan conectados el número y los permisos automáticamente. Si todavía no tienes WhatsApp Business, descárgala gratis desde la tienda de aplicaciones de tu celular antes de conectar.
+      </p>
+      <button id="waConnectBtn" onclick="launchWhatsAppSignup()" style="background:#1877F2;">Conectar mi WhatsApp con Facebook</button>
+      <div id="waConnectedMsg" style="display:none; margin-top:10px; font-size:12.5px; color:#1E7B34; font-weight:700;">✓ WhatsApp conectado</div>
+
+      <details style="margin-top:16px;">
+        <summary style="font-size:12px; color:var(--muted); cursor:pointer;">O ingresa los datos manualmente</summary>
+        <label>Número de teléfono (Phone Number ID de Meta)</label>
+        <input id="whatsappPhoneId" placeholder="Se completa al conectar el número en Meta" />
+        <label>Token de acceso</label>
+        <input id="whatsappAccessToken" placeholder="Token de acceso de la app de Meta" />
+        <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
+      </details>
     </div>
 
     <div class="card">
@@ -214,24 +240,6 @@
       </label>
       <div id="scheduleRows" style="margin-top:10px;"></div>
       <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
-    </div>
-
-    <div class="card">
-      <h2>WhatsApp</h2>
-      <p style="font-size:12.5px; color:var(--muted); margin:0 0 12px; line-height:1.5;">
-        Conecta tu número de <b>WhatsApp Business</b> (la app de WhatsApp para negocios, no tu WhatsApp personal) — inicias sesión con tu propio Facebook y quedan conectados el número y los permisos automáticamente. Si todavía no tienes WhatsApp Business, descárgala gratis desde la tienda de aplicaciones de tu celular antes de conectar.
-      </p>
-      <button id="waConnectBtn" onclick="launchWhatsAppSignup()" style="background:#1877F2;">Conectar mi WhatsApp con Facebook</button>
-      <div id="waConnectedMsg" style="display:none; margin-top:10px; font-size:12.5px; color:#1E7B34; font-weight:700;">✓ WhatsApp conectado</div>
-
-      <details style="margin-top:16px;">
-        <summary style="font-size:12px; color:var(--muted); cursor:pointer;">O ingresa los datos manualmente</summary>
-        <label>Número de teléfono (Phone Number ID de Meta)</label>
-        <input id="whatsappPhoneId" placeholder="Se completa al conectar el número en Meta" />
-        <label>Token de acceso</label>
-        <input id="whatsappAccessToken" placeholder="Token de acceso de la app de Meta" />
-        <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
-      </details>
     </div>
 
     <div class="card">
