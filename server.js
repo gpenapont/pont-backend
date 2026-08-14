@@ -50,10 +50,20 @@ const PUBLIC_CORS_PATTERNS = [
   /^\/api\/chat\/[^/]+\/history$/, // GET historial del chat
   /^\/api\/business\/[^/]+\/menu-items\/[^/]+\/image$/, // GET foto de producto
 ];
-const allowedOrigins = (process.env.ALLOWED_ORIGIN || process.env.FRONTEND_APP_URL || "")
-  .split(",")
-  .map((o) => o.trim())
-  .filter(Boolean);
+// Se incluyen fijos, además de lo que diga la variable de entorno, porque no hay forma de
+// confirmar desde acá qué valor exacto tiene hoy ALLOWED_ORIGIN/FRONTEND_APP_URL en Railway —
+// si no calzara exacto (con o sin barra final, etc.) esto dejaría a TODOS los negocios sin poder
+// usar su propio panel, así que más vale quedarse corto en restricción que romper producción.
+const KNOWN_FRONTEND_ORIGINS = ["https://pont-venta-ia.netlify.app", "https://tevende.pont.lat"];
+const allowedOrigins = Array.from(
+  new Set([
+    ...KNOWN_FRONTEND_ORIGINS,
+    ...(process.env.ALLOWED_ORIGIN || process.env.FRONTEND_APP_URL || "")
+      .split(",")
+      .map((o) => o.trim().replace(/\/+$/, ""))
+      .filter(Boolean),
+  ])
+);
 app.use(
   cors((req, callback) => {
     if (PUBLIC_CORS_PATTERNS.some((re) => re.test(req.path))) {
@@ -61,8 +71,8 @@ app.use(
     }
     // Sin header Origin (llamadas servidor-a-servidor, curl, apps nativas) no es algo que CORS
     // controle — el navegador es el único que lo aplica, así que se deja pasar sin restricción.
-    const origin = req.header("Origin");
-    const allowed = !origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin);
+    const origin = (req.header("Origin") || "").replace(/\/+$/, "");
+    const allowed = !origin || allowedOrigins.includes(origin);
     callback(null, { origin: allowed });
   })
 );
