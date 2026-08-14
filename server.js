@@ -35,7 +35,37 @@ app.use(express.json({
   limit: "5mb", // el límite por defecto es muy chico para subir un logo
   verify: (req, res, buf) => { req.rawBody = buf; }, // lo necesita el webhook de WhatsApp para verificar la firma
 }));
-app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
+// Rutas que de verdad necesitan CORS abierto a cualquier origen: el chat público, que debe
+// poder llamarse tanto desde nuestro propio sitio como desde el sitio propio de cada negocio
+// si decide incorporar el agente en su web (opción 3 de "Tu agente" en Configuración) — ahí no
+// hay forma de saber de antemano el dominio de cada negocio, así que no se puede poner en una
+// lista. Para todo lo demás (settings, catálogo, pedidos, clientes, admin, etc.) el CORS queda
+// restringido a los orígenes propios conocidos — antes esto era "*" para TODAS las rutas,
+// incluidas las que manejan datos privados y autenticados con x-dashboard-key/x-admin-key.
+// Una sola instancia de `cors` decide según la ruta (en vez de dos middlewares separados) para
+// que el preflight OPTIONS de cada ruta también reciba la política correcta, no solo el GET/POST.
+const PUBLIC_CORS_PATTERNS = [
+  /^\/api\/business\/[^/]+$/, // GET info pública del negocio
+  /^\/api\/chat\/[^/]+$/, // POST mensaje del chat
+  /^\/api\/chat\/[^/]+\/history$/, // GET historial del chat
+  /^\/api\/business\/[^/]+\/menu-items\/[^/]+\/image$/, // GET foto de producto
+];
+const allowedOrigins = (process.env.ALLOWED_ORIGIN || process.env.FRONTEND_APP_URL || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(
+  cors((req, callback) => {
+    if (PUBLIC_CORS_PATTERNS.some((re) => re.test(req.path))) {
+      return callback(null, { origin: true });
+    }
+    // Sin header Origin (llamadas servidor-a-servidor, curl, apps nativas) no es algo que CORS
+    // controle — el navegador es el único que lo aplica, así que se deja pasar sin restricción.
+    const origin = req.header("Origin");
+    const allowed = !origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin);
+    callback(null, { origin: allowed });
+  })
+);
 
 // Límite de intentos para las rutas más expuestas a fuerza bruta / abuso (registro y
 // recuperación de clave) — 20 intentos cada 15 minutos por IP. El resto de las rutas se
