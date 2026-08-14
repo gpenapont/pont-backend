@@ -182,6 +182,18 @@
         <input id="whatsappAccessToken" placeholder="Token de acceso de la app de Meta" />
         <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
       </details>
+
+      <hr style="margin:18px 0; border:none; border-top:1px solid var(--gray);" />
+
+      <div style="font-size:13.5px; font-weight:700; color:var(--navy); margin-bottom:10px;">Modo pausa (para atender tú mismo por WhatsApp)</div>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
+        <input type="checkbox" id="botPaused" style="width:auto;" /> Pausar el bot ahora mismo (yo voy a contestar a mano)
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy); margin-top:14px;">
+        <input type="checkbox" id="pauseScheduleEnabled" style="width:auto;" /> Activar horario semanal de pausa
+      </label>
+      <div id="scheduleRows" style="margin-top:10px;"></div>
+      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
     </div>
 
     <div class="card">
@@ -230,70 +242,60 @@
       <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
     </div>
 
-    <div class="card">
-      <h2>Modo pausa (para atender tú mismo por WhatsApp)</h2>
-      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
-        <input type="checkbox" id="botPaused" style="width:auto;" /> Pausar el bot ahora mismo (yo voy a contestar a mano)
-      </label>
-      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy); margin-top:14px;">
-        <input type="checkbox" id="pauseScheduleEnabled" style="width:auto;" /> Activar horario semanal de pausa
-      </label>
-      <div id="scheduleRows" style="margin-top:10px;"></div>
-      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
-    </div>
+    <div style="display:flex; gap:16px; align-items:stretch; flex-wrap:wrap;">
+      <div class="card" style="flex:1; min-width:260px;">
+        <h2>Cobro con Webpay</h2>
+        <p style="font-size:12.5px; color:var(--muted); margin:0 0 12px; line-height:1.5;">
+          ¿Todavía no tienes cuenta de comercio con Transbank? <a href="https://www.transbank.cl" target="_blank" rel="noopener" style="color:var(--coral); font-weight:700;">Afíliate en transbank.cl</a> para conseguir tu código de comercio y API Key.
+        </p>
+        <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
+          <input type="checkbox" id="webpayEnabled" style="width:auto;" /> Activar cobro automático con tarjeta (Webpay)
+        </label>
+        <label>Código de comercio</label>
+        <input id="webpayCommerceCode" placeholder="Se completa cuando tengas la aprobación de Transbank" />
+        <label>API Key de comercio</label>
+        <input id="webpayApiKey" placeholder="Se completa cuando tengas la aprobación de Transbank" />
+        <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
+      </div>
 
-    <div class="card">
-      <h2>Cobro con Webpay</h2>
-      <p style="font-size:12.5px; color:var(--muted); margin:0 0 12px; line-height:1.5;">
-        ¿Todavía no tienes cuenta de comercio con Transbank? <a href="https://www.transbank.cl" target="_blank" rel="noopener" style="color:var(--coral); font-weight:700;">Afíliate en transbank.cl</a> para conseguir tu código de comercio y API Key.
-      </p>
-      <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--navy);">
-        <input type="checkbox" id="webpayEnabled" style="width:auto;" /> Activar cobro automático con tarjeta (Webpay)
-      </label>
-      <label>Código de comercio</label>
-      <input id="webpayCommerceCode" placeholder="Se completa cuando tengas la aprobación de Transbank" />
-      <label>API Key de comercio</label>
-      <input id="webpayApiKey" placeholder="Se completa cuando tengas la aprobación de Transbank" />
-      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
-    </div>
-
-    <div class="card">
-      <h2>Datos bancarios para cobrar a tus clientes</h2>
-      <label>Banco</label>
-      <select id="bankName">
-        <option value="">Selecciona un banco</option>
-        <option>Banco de Chile</option>
-        <option>Banco Internacional</option>
-        <option>Scotiabank</option>
-        <option>Banco BCI</option>
-        <option>Banco BICE</option>
-        <option>HSBC Bank Chile</option>
-        <option>Banco Santander</option>
-        <option>Banco Itaú</option>
-        <option>Banco Falabella</option>
-        <option>Banco Ripley</option>
-        <option>Banco Consorcio</option>
-        <option>Banco BTG Pactual</option>
-        <option>Tanner Banco Digital</option>
-        <option>Tenpo</option>
-        <option>BancoEstado</option>
-        <option>J.P. Morgan</option>
-        <option>China Construction Bank</option>
-        <option>Bank of China</option>
-      </select>
-      <label>Tipo de cuenta</label>
-      <select id="bankAccountType">
-        <option value="">Selecciona un tipo de cuenta</option>
-        <option>Cuenta Corriente</option>
-        <option>Cuenta Vista</option>
-        <option>Cuenta de Ahorro</option>
-        <option>Cuenta RUT</option>
-        <option>Chequera Electrónica</option>
-      </select>
-      <label>N° de cuenta</label><input id="bankAccountNumber" />
-      <label>RUT</label><input id="bankRut" />
-      <label>Correo para comprobantes</label><input id="bankEmail" />
-      <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
+      <div class="card" style="flex:1; min-width:260px;">
+        <h2>Datos bancarios para cobrar a tus clientes</h2>
+        <label>Banco</label>
+        <select id="bankName">
+          <option value="">Selecciona un banco</option>
+          <option>Banco de Chile</option>
+          <option>Banco Internacional</option>
+          <option>Scotiabank</option>
+          <option>Banco BCI</option>
+          <option>Banco BICE</option>
+          <option>HSBC Bank Chile</option>
+          <option>Banco Santander</option>
+          <option>Banco Itaú</option>
+          <option>Banco Falabella</option>
+          <option>Banco Ripley</option>
+          <option>Banco Consorcio</option>
+          <option>Banco BTG Pactual</option>
+          <option>Tanner Banco Digital</option>
+          <option>Tenpo</option>
+          <option>BancoEstado</option>
+          <option>J.P. Morgan</option>
+          <option>China Construction Bank</option>
+          <option>Bank of China</option>
+        </select>
+        <label>Tipo de cuenta</label>
+        <select id="bankAccountType">
+          <option value="">Selecciona un tipo de cuenta</option>
+          <option>Cuenta Corriente</option>
+          <option>Cuenta Vista</option>
+          <option>Cuenta de Ahorro</option>
+          <option>Cuenta RUT</option>
+          <option>Chequera Electrónica</option>
+        </select>
+        <label>N° de cuenta</label><input id="bankAccountNumber" />
+        <label>RUT</label><input id="bankRut" />
+        <label>Correo para comprobantes</label><input id="bankEmail" />
+        <div class="save-row"><button onclick="saveSettings(event)">Guardar</button></div>
+      </div>
     </div>
   </div>
 
