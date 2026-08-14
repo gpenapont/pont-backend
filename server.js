@@ -117,6 +117,8 @@ async function sendVerificationEmail(email, businessName, token) {
         <p><a href="${verifyUrl}" style="display:inline-block;background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Confirmar mi cuenta</a></p>
         <p>Si el botón no funciona, copia y pega este link en tu navegador:<br/>${verifyUrl}</p>
       `,
+      // El texto plano (además del html) ayuda a que los filtros de spam confíen más en el correo.
+      text: `Hola,\n\nFalta un paso para activar la cuenta de ${businessName} en TeVende.\n\nConfirma tu cuenta acá: ${verifyUrl}`,
     }),
   });
   if (!res.ok) {
@@ -141,6 +143,7 @@ async function sendPasswordResetEmail(email, businessName, slug, token) {
         <p>Si el botón no funciona, copia y pega este link en tu navegador:<br/>${resetUrl}</p>
         <p>Este link vence en 1 hora. Si no pediste esto, puedes ignorar el correo.</p>
       `,
+      text: `Hola,\n\nRecibimos una solicitud para cambiar la clave del panel de ${businessName} en TeVende.\n\nElige una clave nueva acá (vence en 1 hora): ${resetUrl}\n\nSi no pediste esto, puedes ignorar este correo.`,
     }),
   });
   if (!res.ok) {
@@ -165,6 +168,30 @@ async function sendAbandonedCartAlertEmail(business, order) {
         <p>Puedes revisarlo y enviarle un recordatorio desde tu panel:</p>
         <p><a href="${ventasUrl}" style="display:inline-block;background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Ver carritos abandonados</a></p>
       `,
+      text: `Hola,\n\nUn cliente de ${business.name} armó un pedido pero no lo confirmó: ${items}${order.customer_name ? ` (${order.customer_name})` : ""}.\n\nRevísalo y envíale un recordatorio desde tu panel: ${ventasUrl}`,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error("Error de Resend: " + err);
+  }
+}
+
+async function sendNewOrdersAlertEmail(business) {
+  const ventasUrl = `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${business.slug}`;
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: RESEND_FROM,
+      to: business.email,
+      subject: "Tienes pedidos nuevos en TeVende",
+      html: `
+        <p>Hola,</p>
+        <p>Tienes pedidos nuevos en <b>${business.name}</b> desde la última revisión.</p>
+        <p><a href="${ventasUrl}" style="display:inline-block;background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Ver mis pedidos</a></p>
+      `,
+      text: `Hola,\n\nTienes pedidos nuevos en ${business.name} desde la última revisión.\n\nRevísalos acá: ${ventasUrl}`,
     }),
   });
   if (!res.ok) {
@@ -1794,6 +1821,53 @@ async function alertarCarritosAbandonados() {
 }
 setInterval(alertarCarritosAbandonados, 30 * 60 * 1000);
 alertarCarritosAbandonados();
+
+// Avisa por correo a cada negocio si tiene pedidos nuevos (confirmados) desde la última vez que
+// se revisó — solo lunes a viernes, cerca de las 7am y las 14:00 hora de Chile. No es un cron de
+// verdad (Railway no trae uno): se apoya en el mismo polling cada 30 min que ya usa el resto de
+// estas alertas, pero con una guarda de "franja ya procesada hoy" para no mandar el correo más
+// de una vez por franja aunque el intervalo tiquee varias veces dentro de la misma hora. No gasta
+// tokens de Claude — es solo una consulta a la base de datos.
+let lastOrdersAlertSlot = null; // ej. "2026-08-17-07"
+async function alertarPedidosNuevos() {
+  try {
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Santiago" }));
+    const day = now.getDay(); // 0 = domingo, 6 = sábado
+    if (day === 0 || day === 6) return;
+
+    const hour = now.getHours();
+    const slotHour = hour === 7 ? "07" : hour === 14 ? "14" : null;
+    if (!slotHour) return;
+
+    const slot = `${now.toISOString().slice(0, 10)}-${slotHour}`;
+    if (slot === lastOrdersAlertSlot) return; // esta franja de hoy ya se procesó
+    lastOrdersAlertSlot = slot;
+
+    const { rows: businesses } = await pool.query(
+      "select id, slug, name, email, last_orders_alert_at from businesses where email is not null and email_verified = true"
+    );
+
+    for (const business of businesses) {
+      const since = business.last_orders_alert_at || new Date(0);
+      const { rows } = await pool.query(
+        "select count(*)::int as count from orders where business_id = $1 and confirmed_at is not null and confirmed_at > $2",
+        [business.id, since]
+      );
+      if (rows[0].count > 0) {
+        try {
+          await sendNewOrdersAlertEmail(business);
+        } catch (e) {
+          console.error("Error enviando alerta de pedidos nuevos:", e);
+        }
+      }
+      await pool.query("update businesses set last_orders_alert_at = now() where id = $1", [business.id]);
+    }
+  } catch (e) {
+    console.error("Error procesando alerta de pedidos nuevos:", e);
+  }
+}
+setInterval(alertarPedidosNuevos, 30 * 60 * 1000);
+alertarPedidosNuevos();
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
