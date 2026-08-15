@@ -855,7 +855,10 @@
             <div class="order-total">${fmt(o.total)}</div>
             <div class="order-meta">Última actividad: ${new Date(o.last_message_at).toLocaleString("es-CL")}</div>
           </div>
-          <button class="small" id="remind-${o.id}" onclick="remindAbandoned('${o.id}')">Enviar recordatorio</button>
+          <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
+            <button class="small" id="remind-${o.id}" onclick="remindAbandoned('${o.id}')">Enviar recordatorio</button>
+            <button class="small" style="background:#5C6B76;" onclick="dismissAbandoned('${o.id}')">No enviar recordatorio</button>
+          </div>
         </div>`;
     }).join("");
   }
@@ -873,6 +876,16 @@
       btn.textContent = "No se pudo enviar";
       btn.disabled = false;
     }
+  }
+
+  // Solo oculta el aviso del panel — no borra la conversación ni el pedido en borrador,
+  // así que si el cliente vuelve a escribir, todo sigue como estaba.
+  async function dismissAbandoned(orderId) {
+    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/orders/${orderId}/dismiss-abandoned`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    loadAbandoned();
   }
 
   // ---- Pedidos ----

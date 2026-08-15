@@ -1083,12 +1083,26 @@ app.get("/api/business/:slug/abandoned-orders", async (req, res) => {
      join conversations conv on conv.id = o.conversation_id
      left join messages m on m.conversation_id = conv.id
      where o.business_id = $1 and o.status = 'draft' and o.items::text <> '[]'
+       and coalesce(o.abandoned_dismissed, false) = false
      group by o.id
      having max(m.created_at) < now() - interval '1 minute' * $2
      order by max(m.created_at) desc`,
     [business.id, CARRITO_ABANDONADO_MINUTOS]
   );
   res.json(rows);
+});
+
+// El negocio descarta el aviso de carrito abandonado sin mandarle nada al cliente — deja de
+// aparecer en el panel, pero la conversación y el pedido en borrador siguen intactos.
+app.post("/api/business/:slug/orders/:orderId/dismiss-abandoned", async (req, res) => {
+  const business = await getBusinessWithAuth(req, res);
+  if (!business) return;
+
+  await pool.query("update orders set abandoned_dismissed = true where id = $1 and business_id = $2", [
+    req.params.orderId,
+    business.id,
+  ]);
+  res.json({ dismissed: true });
 });
 
 // El negocio le manda un recordatorio a un cliente que dejó un carrito abandonado.
