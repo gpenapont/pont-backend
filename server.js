@@ -307,6 +307,7 @@ function buildSystemPrompt(business, menuItems, customer) {
   } else {
     paymentSection = `- La forma de pago se coordina directamente al momento de la entrega o el intercambio. No inventes datos bancarios ni digital de pago que no tengas.`;
   }
+  paymentSection += `\n- Excepción: si el despacho quedó pendiente de cotizar (delivery.cost_pending en true, ver más abajo), todavía NO actives el pago — no escribas [LINK_PAGO] ni [DATOS_BANCARIOS] ni pidas transferencia. Dile al cliente que le avisan el total final (con el despacho incluido) antes de cobrar.`;
 
   const knownName = customer && customer.name ? customer.name : null;
   const knownAddress = customer && customer.last_address ? customer.last_address : null;
@@ -338,7 +339,7 @@ ${menuText}
 
 Tu trabajo:
 - Ayudar al cliente a elegir productos y calcular el total.
-- Si el negocio especificó algún costo de despacho en sus instrucciones propias (más arriba), y el cliente elige despacho a domicilio, agrégalo como un ítem más en la lista de productos (por ejemplo "Despacho a domicilio" con su precio), para que quede visible en el desglose y no escondido dentro del total. Si el negocio dice que el despacho se cotiza aparte sin dar un monto fijo, no inventes un número — dilo así de claro.
+- Si el negocio especificó algún costo de despacho en sus instrucciones propias (más arriba), y el cliente elige despacho a domicilio, agrégalo como un ítem más en la lista de productos (por ejemplo "Despacho a domicilio" con su precio), para que quede visible en el desglose y no escondido dentro del total. Si el negocio dice que el despacho se cotiza aparte sin dar un monto fijo, no inventes un número — dilo así de claro, y si el cliente igual quiere seguir con el pedido, marca "delivery":{"cost_pending":true} (ver formato del bloque <order> más abajo) y avísale que le van a confirmar el total final (con el despacho) antes de cobrarle. Nunca sigas adelante con el pago mientras el despacho esté así de pendiente.
 - Cada vez que le digas al cliente que le vas a enviar una cotización (por el motivo que sea: un despacho sin costo fijo, un producto que requiere cotización personalizada, o cualquier otro caso indicado en las instrucciones del negocio), es obligatorio pedirle en esa misma respuesta su nombre, teléfono y correo electrónico, si todavía no los tienes, para poder contactarlo con la cotización.
 - Responder en español neutro, amable pero sin modismos chilenos informales (nada de "bacán", "al tiro", "cachai", "po") y sin sonar tampoco excesivamente formal o robótico. Mantén las respuestas razonablemente breves, salvo que las instrucciones del negocio (más arriba) pidan un estilo más extenso, como explicaciones o recomendaciones detalladas. Sin markdown ni asteriscos.
 - Si el cliente indica que no quiere agregar nada más (por ejemplo "nada más", "eso es todo", "solo eso", "no gracias"), no vuelvas a preguntar si quiere algo más. Avanza directo al siguiente paso: si falta el tipo de entrega, pregúntalo; si ya lo tienes, resume el pedido completo y pide confirmación.
@@ -351,16 +352,21 @@ ${paymentSection}
 
 Formato obligatorio de cada respuesta:
 Primero tu respuesta al cliente en texto plano — esta parte nunca puede estar vacía, ni siquiera al confirmar el pedido, siempre debe haber un mensaje visible para el cliente. Después, en una línea aparte, agrega exactamente un bloque con el estado del pedido, así:
-<order>{"customer_name":"...","customer_email":"...","customer_rut":"...","items":[{"name":"...","qty":1,"price":0}],"total":0,"delivery":{"type":"despacho","address":"..."},"payment":{"status":"pendiente"},"confirmed":false}</order>
+<order>{"customer_name":"...","customer_email":"...","customer_rut":"...","items":[{"name":"...","qty":1,"price":0}],"total":0,"delivery":{"type":"despacho","address":"...","cost_pending":false},"payment":{"status":"pendiente"},"confirmed":false}</order>
 
 El campo customer_name debe llevar el nombre del cliente apenas lo sepas (si ya lo sabías de antes, repítelo igual en cada bloque). Si aún no lo sabes, usa null.
 Los campos customer_email y customer_rut deben llevar el correo y RUT del cliente si te los llegó a dar (repítelos igual en cada bloque si ya los sabías de antes); si no te los dio, usa null en ambos. Nunca los inventes.
+El campo delivery.cost_pending debe ser true solo mientras el despacho se cotice aparte y todavía no tengas el monto (ver arriba); en cualquier otro caso, déjalo en false.
 El campo payment.status puede ser: null, "pendiente" o "cliente_avisa_transferencia" (usa null si este negocio no cobra por transferencia).
 Si aún no saben el tipo de entrega, usa "delivery":null. Si aún no han pedido nada, usa items vacío y total 0. Este bloque nunca lo ve el cliente. Nunca lo omitas.`;
 }
 
 function deriveOrderStatus(parsedOrder) {
   if (!parsedOrder.confirmed) return "draft";
+  // El despacho se cotiza aparte y todavía no hay monto: el pedido queda pendiente de que el
+  // negocio agregue ese costo (ver /api/orders/:orderId/delivery-cost) — no puede pasar a
+  // "confirmado" (que implica que ya se le puede cobrar el total definitivo).
+  if (parsedOrder.delivery && parsedOrder.delivery.cost_pending) return "pendiente_agregacostodespacho";
   if (parsedOrder.payment && parsedOrder.payment.status === "cliente_avisa_transferencia") return "pago_avisado";
   return "confirmado";
 }
@@ -1259,6 +1265,63 @@ app.patch("/api/orders/:orderId/invoice-status", async (req, res) => {
     req.params.orderId,
   ]);
   res.json(rows[0]);
+});
+
+// El negocio agrega el costo de despacho a un pedido que quedó "pendiente_agregacostodespacho"
+// (el agente no pudo calcularlo solo porque el negocio cotiza el despacho aparte). Suma el ítem
+// al pedido, recalcula el total, pasa el pedido a "confirmado" y recién ahí le manda al cliente
+// el link de pago o los datos bancarios — antes de esto el cliente nunca llegó a ver
+// instrucciones de pago, porque el total todavía no era el definitivo. Misma clave.
+app.patch("/api/orders/:orderId/delivery-cost", async (req, res) => {
+  const price = Number(req.body.price);
+  if (!price || price <= 0) return res.status(400).json({ error: "Ingresa un monto de despacho válido" });
+
+  const { rows: orderRows } = await pool.query(
+    "select o.id, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
+    [req.params.orderId]
+  );
+  const business = orderRows[0];
+  if (!business) return res.status(404).json({ error: "Pedido no encontrado" });
+  const isAdminDelivery = ADMIN_PASSWORD && req.headers["x-dashboard-key"] === ADMIN_PASSWORD;
+  if (!isAdminDelivery && (!business.dashboard_password || req.headers["x-dashboard-key"] !== business.dashboard_password)) {
+    return res.status(401).json({ error: "Clave incorrecta" });
+  }
+
+  const { rows: fullOrderRows } = await pool.query("select * from orders where id = $1", [req.params.orderId]);
+  const order = fullOrderRows[0];
+  if (!order || order.status !== "pendiente_agregacostodespacho") {
+    return res.status(400).json({ error: "Este pedido no está esperando el costo de despacho" });
+  }
+
+  const items = [...(order.items || []), { name: "Despacho a domicilio", qty: 1, price }];
+  const total = (order.total || 0) + price;
+
+  const { rows: updatedRows } = await pool.query(
+    "update orders set items=$1, total=$2, status='confirmado' where id=$3 returning *",
+    [JSON.stringify(items), total, order.id]
+  );
+  const updatedOrder = updatedRows[0];
+
+  const fmtCLP = (n) => "$" + n.toLocaleString("es-CL");
+  let messageText = `¡Listo! Ya tenemos el valor de tu despacho: ${fmtCLP(price)}. El total de tu pedido queda en ${fmtCLP(total)}.`;
+  if (business.webpay_enabled) {
+    try {
+      const payLink = await createWebpayTransaction(business, updatedOrder);
+      messageText += ` Puedes pagar aquí: ${payLink}`;
+    } catch (e) {
+      console.error("Error creando transacción Webpay al agregar despacho:", e);
+      messageText += " Tuvimos un problema generando el link de pago, te lo mandamos apenas lo resolvamos.";
+    }
+  } else if (business.bank_account_number) {
+    messageText += ` Puedes transferir a:\n${formatBankDetails(business)}`;
+  }
+  try {
+    await sendCustomerMessage(business, order.conversation_id, messageText);
+  } catch (e) {
+    console.error("Error avisándole al cliente el costo de despacho:", e);
+  }
+
+  res.json(updatedOrder);
 });
 
 // El negocio elimina un pedido por completo (por ejemplo, un pedido de prueba o duplicado). Misma clave.

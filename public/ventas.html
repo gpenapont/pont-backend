@@ -534,6 +534,7 @@
 
   const STATUS_LABEL = {
     draft: "Borrador",
+    pendiente_agregacostodespacho: "Falta agregar costo de despacho",
     confirmado: "Confirmado, sin pagar",
     pago_avisado: "Avisó transferencia",
     pago_verificado: "Pago verificado",
@@ -542,6 +543,7 @@
   };
   const STATUS_COLOR = {
     draft: { bg: "#E3E4E3", fg: "#5C6B76" },
+    pendiente_agregacostodespacho: { bg: "#DCE8F5", fg: "#1F5C99" },
     confirmado: { bg: "#FFF3D6", fg: "#8A6D00" },
     pago_avisado: { bg: "#FBE2DE", fg: "#B03A2A" },
     pago_verificado: { bg: "#DCEFE4", fg: "#1E7B34" },
@@ -952,6 +954,7 @@
               <div class="order-meta">${delivery}</div>
               <div class="order-meta">${new Date(o.created_at).toLocaleString("es-CL")}</div>
               <select style="margin-top:8px; background:${c.bg}; color:${c.fg}; border-color:${c.fg};" onchange="changeStatus('${o.id}', this.value)">${statusOptions}</select>
+              ${o.status === "pendiente_agregacostodespacho" ? `<button class="small" style="margin-top:8px; background:var(--coral);" onclick="addDeliveryCost('${o.id}')">Agregar costo de despacho</button>` : ""}
             </div>
             <div style="flex:0 0 33%; min-width:0; text-align:right; display:flex; flex-direction:column; align-items:flex-end;">
               ${o.customer_email ? `<div class="order-meta">Correo: ${escapeHtml(o.customer_email)}</div>` : ""}
@@ -1075,6 +1078,18 @@
       method: "PATCH", headers: authHeaders(), body: JSON.stringify({ invoice_status }),
     });
     if (!res.ok) { alert("No se pudo actualizar (código " + res.status + ")."); return; }
+    loadOrders();
+  }
+
+  async function addDeliveryCost(orderId) {
+    const priceStr = prompt("¿Cuánto cuesta el despacho para este pedido? (solo el número, en pesos)");
+    if (priceStr === null) return;
+    const price = Number(priceStr.replace(/[^\d]/g, ""));
+    if (!price) { alert("Ingresa un monto válido."); return; }
+    const res = await fetch(`${BACKEND_URL}/api/orders/${orderId}/delivery-cost`, {
+      method: "PATCH", headers: authHeaders(), body: JSON.stringify({ price }),
+    });
+    if (!res.ok) { alert("No se pudo agregar el costo de despacho (código " + res.status + ")."); return; }
     loadOrders();
   }
 
