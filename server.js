@@ -426,6 +426,10 @@ app.get("/api/business/:slug", async (req, res) => {
   res.json({ slug: business.slug, name: business.name, greeting: business.greeting, logoData: business.logo_data, menuItems });
 });
 
+// Texto precargado en "Cómo debe comportarse tu asistente" para todo negocio nuevo — el negocio
+// lo puede editar o borrar libremente desde Configuración, es solo un punto de partida razonable.
+const DEFAULT_SYSTEM_PROMPT_EXTRA = `Eres un asesor comercial, no un vendedor que empuja. Tu prioridad es entender lo que el cliente necesita antes de recomendar, y cerrar la venta cuando exista una opción clara para él. Cuando corresponda, sugieres un complemento o una opción de mayor valor de forma natural y una sola vez, nunca insistes ni lo repites si el cliente no muestra interés, y siempre explicas brevemente por qué esa sugerencia le sirve, en vez de solo nombrarla. Si no tienes la información para resolver algo con certeza, lo dices con honestidad en vez de inventar, y ofreces derivarlo a una persona del equipo.`;
+
 // Autoregistro: crea un negocio nuevo sin intervención manual. Protegido con captcha (para que no
 // sea un bot) y verificación de correo (para que sea un correo real) — no con un código que Gonzalo
 // tenga que repartir a mano, así escala sin que él intervenga en cada registro.
@@ -467,8 +471,8 @@ app.post("/api/business/signup", authRateLimit, async (req, res) => {
   const verifyToken = crypto.randomBytes(24).toString("hex");
 
   await pool.query(
-    `insert into businesses (slug, name, dashboard_password, greeting, email, email_verified, email_verify_token)
-     values ($1, $2, $3, $4, $5, false, $6)`,
+    `insert into businesses (slug, name, dashboard_password, greeting, email, email_verified, email_verify_token, system_prompt_extra)
+     values ($1, $2, $3, $4, $5, false, $6, $7)`,
     [
       slug,
       name.trim(),
@@ -476,6 +480,7 @@ app.post("/api/business/signup", authRateLimit, async (req, res) => {
       `¡Bienvenido a ${name.trim()}!`,
       email.trim(),
       verifyToken,
+      DEFAULT_SYSTEM_PROMPT_EXTRA,
     ]
   );
 
