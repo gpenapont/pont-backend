@@ -125,8 +125,8 @@
   <!-- PEDIDOS -->
   <div class="tab-panel active" id="panelPedidos">
     <div class="card" id="abandonedCard" style="display:none; border:1.5px solid var(--coral);">
-      <h2>Carritos abandonados</h2>
-      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Clientes que armaron un pedido pero llevan más de media hora sin confirmarlo.</p>
+      <h2>Carrito abandonado o Conversación sin una venta cerrada</h2>
+      <p style="font-size:12.5px; color:var(--muted); margin:0 0 10px;">Clientes que llevan más de media hora sin escribir y la conversación no terminó en una venta — hayan armado un carrito o no.</p>
       <div id="abandonedList"></div>
     </div>
 
@@ -847,30 +847,48 @@
 
   async function loadAbandoned() {
     const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/abandoned-orders`, { headers: authHeaders() });
-    const orders = await res.json();
+    const rows = await res.json();
     const card = document.getElementById("abandonedCard");
-    if (!orders.length) { card.style.display = "none"; return; }
+    if (!rows.length) { card.style.display = "none"; return; }
     card.style.display = "block";
-    document.getElementById("abandonedList").innerHTML = orders.map((o) => {
+    document.getElementById("abandonedList").innerHTML = rows.map((o) => {
       const items = (o.items || []).map((it) => `${it.qty}x ${escapeHtml(it.name)}`).join(", ");
+      const name = escapeHtml(o.customer_name || o.known_name || "Cliente sin nombre");
+      const middle = items
+        ? `<div class="order-items">${items}</div><div class="order-total">${fmt(o.total)}</div>`
+        : `<div class="order-items" style="font-style:italic;">Conversación sin un pedido armado</div>`;
+      // El nombre es texto libre del cliente, así que va en data-* (el navegador lo decodifica
+      // solo) en vez de armado dentro de un onclick — evita tener que lidiar con comillas dentro
+      // del nombre rompiendo el JS del atributo.
+      const actionBtn = items
+        ? `<button class="small" id="remind-${o.session_id}" data-order-id="${o.order_id}" data-session-id="${escapeHtml(o.session_id)}" data-action="remind">Enviar recordatorio</button>`
+        : `<button class="small" data-session-id="${escapeHtml(o.session_id)}" data-name="${name}" data-action="view">Ver conversación</button>`;
       return `
         <div class="order-row" style="padding:8px 0; border-bottom:1px solid var(--gray);">
           <div>
-            <div style="font-weight:700; font-size:13.5px; color:var(--navy);">${escapeHtml(o.customer_name || "Cliente sin nombre")}</div>
-            <div class="order-items">${items}</div>
-            <div class="order-total">${fmt(o.total)}</div>
+            <div style="font-weight:700; font-size:13.5px; color:var(--navy);">${name}</div>
+            ${middle}
             <div class="order-meta">Última actividad: ${new Date(o.last_message_at).toLocaleString("es-CL")}</div>
           </div>
           <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
-            <button class="small" id="remind-${o.id}" onclick="remindAbandoned('${o.id}')">Enviar recordatorio</button>
-            <button class="small" style="background:#5C6B76;" onclick="dismissAbandoned('${o.id}')">No enviar recordatorio</button>
+            ${actionBtn}
+            <button class="small" style="background:#5C6B76;" data-session-id="${escapeHtml(o.session_id)}" data-action="dismiss">No enviar recordatorio</button>
           </div>
         </div>`;
     }).join("");
   }
 
-  async function remindAbandoned(orderId) {
-    const btn = document.getElementById(`remind-${orderId}`);
+  document.getElementById("abandonedList").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    const { action, sessionId, orderId, name } = btn.dataset;
+    if (action === "remind") remindAbandoned(orderId, sessionId);
+    else if (action === "dismiss") dismissAbandoned(sessionId);
+    else if (action === "view") { showTab("clientes"); openCustomerChat(sessionId, name, ""); }
+  });
+
+  async function remindAbandoned(orderId, sessionId) {
+    const btn = document.getElementById(`remind-${sessionId}`);
     btn.disabled = true;
     const res = await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/orders/${orderId}/remind`, {
       method: "POST",
@@ -886,8 +904,8 @@
 
   // Solo oculta el aviso del panel — no borra la conversación ni el pedido en borrador,
   // así que si el cliente vuelve a escribir, todo sigue como estaba.
-  async function dismissAbandoned(orderId) {
-    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/orders/${orderId}/dismiss-abandoned`, {
+  async function dismissAbandoned(sessionId) {
+    await fetch(`${BACKEND_URL}/api/business/${BUSINESS_SLUG}/conversations/${encodeURIComponent(sessionId)}/dismiss-abandoned`, {
       method: "POST",
       headers: authHeaders(),
     });

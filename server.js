@@ -166,7 +166,11 @@ function getAlertRecipients(business) {
 }
 
 async function sendAbandonedCartAlertEmail(business, order, recipients) {
-  const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ") || "sin detalle";
+  const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
+  const who = order.customer_name ? ` (${order.customer_name})` : "";
+  const situation = items
+    ? `armó un pedido pero no lo confirmó: ${items}${who}`
+    : `escribió${who}, pero la conversación quedó sin un pedido cerrado`;
   const ventasUrl = `${process.env.FRONTEND_APP_URL || ""}/ventas.html?negocio=${business.slug}`;
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -177,11 +181,11 @@ async function sendAbandonedCartAlertEmail(business, order, recipients) {
       subject: "Un cliente dejó un carrito abandonado en TeVende",
       html: `
         <p>Hola,</p>
-        <p>Un cliente de <b>${business.name}</b> armó un pedido pero no lo confirmó: ${items}${order.customer_name ? ` (${order.customer_name})` : ""}.</p>
-        <p>Puedes revisarlo y enviarle un recordatorio desde tu panel:</p>
+        <p>Un cliente de <b>${business.name}</b> ${situation}.</p>
+        <p>Puedes revisarlo desde tu panel:</p>
         <p><a href="${ventasUrl}" style="display:inline-block;background:#E64F3F;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:bold;">Ver carritos abandonados</a></p>
       `,
-      text: `Hola,\n\nUn cliente de ${business.name} armó un pedido pero no lo confirmó: ${items}${order.customer_name ? ` (${order.customer_name})` : ""}.\n\nRevísalo y envíale un recordatorio desde tu panel: ${ventasUrl}`,
+      text: `Hola,\n\nUn cliente de ${business.name} ${situation}.\n\nRevísalo desde tu panel: ${ventasUrl}`,
     }),
   });
   if (!res.ok) {
@@ -469,7 +473,7 @@ app.post("/api/business/signup", authRateLimit, async (req, res) => {
       slug,
       name.trim(),
       password.trim(),
-      `¡Bienvenido a ${name.trim()}! Cuéntanos qué buscas y te ayudamos a encontrarlo.`,
+      `¡Bienvenido a ${name.trim()}!`,
       email.trim(),
       verifyToken,
     ]
@@ -1076,21 +1080,29 @@ app.get("/api/business/:slug/orders", async (req, res) => {
   res.json(rows);
 });
 
-// "Carrito abandonado" = el cliente armó un pedido (tiene productos) pero nunca lo confirmó,
-// y lleva un rato sin escribir. Para avisarle al negocio en la pestaña Pedidos.
+// "Carrito abandonado o conversación sin venta cerrada" = el cliente escribió, la conversación
+// lleva un rato sin actividad, y no terminó en una venta (ni pagada, ni esperando pago, ni
+// avisó transferencia). Cubre tanto al que armó un carrito y no lo confirmó como al que solo
+// preguntó y se fue, o al que quedó esperando una cotización que el agente no pudo calcular
+// solo. Para avisarle al negocio en la pestaña Pedidos.
 const CARRITO_ABANDONADO_MINUTOS = 30;
 app.get("/api/business/:slug/abandoned-orders", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
 
   const { rows } = await pool.query(
-    `select o.*, max(m.created_at) as last_message_at
-     from orders o
-     join conversations conv on conv.id = o.conversation_id
+    `select conv.session_id, cu.name as known_name, o.id as order_id, o.items, o.total,
+            o.customer_name, o.status as order_status, max(m.created_at) as last_message_at
+     from conversations conv
      left join messages m on m.conversation_id = conv.id
-     where o.business_id = $1 and o.status = 'draft' and o.items::text <> '[]'
-       and coalesce(o.abandoned_dismissed, false) = false
-     group by o.id
+     left join customers cu on cu.business_id = conv.business_id and cu.session_id = conv.session_id
+     left join lateral (
+       select * from orders o2 where o2.conversation_id = conv.id order by o2.created_at desc limit 1
+     ) o on true
+     where conv.business_id = $1
+       and coalesce(conv.abandoned_dismissed, false) = false
+       and (o.status is null or o.status not in ('confirmado','pago_avisado','pago_verificado','cancelado','eliminado'))
+     group by conv.session_id, cu.name, o.id, o.items, o.total, o.customer_name, o.status
      having max(m.created_at) < now() - interval '1 minute' * $2
      order by max(m.created_at) desc`,
     [business.id, CARRITO_ABANDONADO_MINUTOS]
@@ -1098,15 +1110,16 @@ app.get("/api/business/:slug/abandoned-orders", async (req, res) => {
   res.json(rows);
 });
 
-// El negocio descarta el aviso de carrito abandonado sin mandarle nada al cliente — deja de
-// aparecer en el panel, pero la conversación y el pedido en borrador siguen intactos.
-app.post("/api/business/:slug/orders/:orderId/dismiss-abandoned", async (req, res) => {
+// El negocio descarta el aviso sin mandarle nada al cliente — deja de aparecer en el panel, pero
+// la conversación (y el pedido en borrador, si hay uno) siguen intactos. Va a nivel de
+// conversación, no de pedido, porque muchas de estas ni siquiera tienen un pedido asociado.
+app.post("/api/business/:slug/conversations/:sessionId/dismiss-abandoned", async (req, res) => {
   const business = await getBusinessWithAuth(req, res);
   if (!business) return;
 
-  await pool.query("update orders set abandoned_dismissed = true where id = $1 and business_id = $2", [
-    req.params.orderId,
+  await pool.query("update conversations set abandoned_dismissed = true where business_id = $1 and session_id = $2", [
     business.id,
+    req.params.sessionId,
   ]);
   res.json({ dismissed: true });
 });
@@ -1893,35 +1906,41 @@ async function eliminarCarritosAbandonados() {
 setInterval(eliminarCarritosAbandonados, 30 * 60 * 1000);
 eliminarCarritosAbandonados();
 
-// Le avisa por correo al negocio (al mail con el que creó su cuenta) apenas detecta un carrito
-// abandonado nuevo. abandoned_alert_sent evita mandar el mismo aviso más de una vez por carrito.
+// Le avisa por correo al negocio (al mail con el que creó su cuenta, o a los adicionales que haya
+// cargado) apenas detecta una conversación nueva sin venta cerrada — con carrito armado o sin él,
+// incluidas las que quedaron esperando una cotización que el agente no pudo calcular solo.
+// abandoned_alert_sent (en conversations, no en orders — muchas de estas ni tienen pedido) evita
+// mandar el mismo aviso más de una vez por conversación.
 async function alertarCarritosAbandonados() {
   try {
     const { rows: candidates } = await pool.query(
-      `select o.*
-       from orders o
-       join conversations conv on conv.id = o.conversation_id
+      `select conv.id as conversation_id, conv.business_id, o.id as order_id, o.items, o.total, o.customer_name
+       from conversations conv
        left join messages m on m.conversation_id = conv.id
-       where o.status = 'draft' and o.items::text <> '[]' and coalesce(o.abandoned_alert_sent, false) = false
-       group by o.id
+       left join lateral (
+         select * from orders o2 where o2.conversation_id = conv.id order by o2.created_at desc limit 1
+       ) o on true
+       where coalesce(conv.abandoned_alert_sent, false) = false
+         and (o.status is null or o.status not in ('confirmado','pago_avisado','pago_verificado','cancelado','eliminado'))
+       group by conv.id, o.id, o.items, o.total, o.customer_name
        having max(m.created_at) < now() - interval '1 minute' * $1`,
       [CARRITO_ABANDONADO_MINUTOS]
     );
 
-    for (const order of candidates) {
-      const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [order.business_id]);
+    for (const candidate of candidates) {
+      const { rows: bizRows } = await pool.query("select * from businesses where id = $1", [candidate.business_id]);
       const business = bizRows[0];
       if (!business || business.abandoned_cart_alert_enabled === false) continue;
       const recipients = getAlertRecipients(business);
       if (recipients.length === 0) continue;
 
       try {
-        await sendAbandonedCartAlertEmail(business, order, recipients);
+        await sendAbandonedCartAlertEmail(business, candidate, recipients);
       } catch (e) {
         console.error("Error enviando alerta de carrito abandonado:", e);
         continue;
       }
-      await pool.query("update orders set abandoned_alert_sent = true where id = $1", [order.id]);
+      await pool.query("update conversations set abandoned_alert_sent = true where id = $1", [candidate.conversation_id]);
     }
   } catch (e) {
     console.error("Error procesando alertas de carritos abandonados:", e);
