@@ -109,6 +109,10 @@ async function sendVerificationEmail(email, businessName, token) {
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       from: RESEND_FROM,
+      // Un reply_to a una casilla real (en vez de dejar que las respuestas caigan en el "noreply"
+      // del from) ayuda a la reputación del dominio ante Gmail/Outlook — parte de intentar frenar
+      // que este correo se vaya a spam.
+      reply_to: "info@pont.lat",
       to: email,
       subject: "Confirma tu cuenta en TeVende",
       html: `
@@ -134,6 +138,7 @@ async function sendPasswordResetEmail(email, businessName, slug, token) {
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       from: RESEND_FROM,
+      reply_to: "info@pont.lat",
       to: email,
       subject: "Recupera tu clave de TeVende",
       html: `
@@ -177,6 +182,7 @@ async function sendAbandonedCartAlertEmail(business, order, recipients) {
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       from: RESEND_FROM,
+      reply_to: "info@pont.lat",
       to: recipients,
       subject: "Un cliente dejó un carrito abandonado en TeVende",
       html: `
@@ -201,6 +207,7 @@ async function sendNewOrdersAlertEmail(business, recipients) {
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       from: RESEND_FROM,
+      reply_to: "info@pont.lat",
       to: recipients,
       subject: "Tienes pedidos nuevos en TeVende",
       html: `
