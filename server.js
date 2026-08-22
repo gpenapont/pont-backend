@@ -302,13 +302,13 @@ function buildDeliverySection(b) {
   const deliveryRules = b.delivery_rules || null;
 
   if (pickup && delivery) {
-    return `Antes de cerrar el pedido, pregunta si es despacho a domicilio o retiro en tienda.${pickupAddress ? ` El retiro en tienda es en: ${pickupAddress}.` : ""}${deliveryRules ? ` Reglas de despacho a domicilio del negocio: ${deliveryRules}.` : ""} Si no sabes el nombre del cliente (revisa la información conocida más arriba), pregúntaselo en ese mismo mensaje, junto con la pregunta de entrega — por ejemplo: "¿Me confirmas tu nombre, y si prefieres despacho a domicilio o retiro en tienda?". No lo dejes para después ni lo omitas. Si es despacho y no tienes una dirección registrada, pide también dirección y comuna.`;
+    return `Antes de cerrar el pedido, pregunta si es despacho a domicilio o retiro en tienda.${pickupAddress ? ` El retiro en tienda es en: ${pickupAddress}.` : ""}${deliveryRules ? ` Reglas de despacho a domicilio del negocio: ${deliveryRules}.` : ""} Si no sabes el nombre del cliente (revisa la información conocida más abajo), pregúntaselo en ese mismo mensaje, junto con la pregunta de entrega — por ejemplo: "¿Me confirmas tu nombre, y si prefieres despacho a domicilio o retiro en tienda?". No lo dejes para después ni lo omitas. Si es despacho y no tienes una dirección registrada, pide también dirección y comuna.`;
   }
   if (pickup && !delivery) {
     return `Este negocio solo ofrece retiro en tienda, no hace despacho a domicilio — no ofrezcas despacho como opción.${pickupAddress ? ` El retiro es en: ${pickupAddress}, coméntaselo al cliente cuando corresponda.` : ""} Si no sabes el nombre del cliente, pregúntaselo en algún momento natural antes de cerrar el pedido. Antes de cerrar el pedido, confirma con el cliente que retirará en tienda.`;
   }
   if (!pickup && delivery) {
-    return `Este negocio solo hace despacho a domicilio, no ofrece retiro en tienda — no ofrezcas retiro como opción.${deliveryRules ? ` Reglas de despacho a domicilio del negocio: ${deliveryRules}.` : ""} Antes de cerrar el pedido, pide la dirección y comuna de despacho (si no la tienes ya registrada, revisa la información conocida más arriba) y el nombre del cliente si no lo sabes.`;
+    return `Este negocio solo hace despacho a domicilio, no ofrece retiro en tienda — no ofrezcas retiro como opción.${deliveryRules ? ` Reglas de despacho a domicilio del negocio: ${deliveryRules}.` : ""} Antes de cerrar el pedido, pide la dirección y comuna de despacho (si no la tienes ya registrada, revisa la información conocida más abajo) y el nombre del cliente si no lo sabes.`;
   }
   return `Este negocio no tiene un método de entrega configurado — no preguntes por tipo de entrega, solo confirma el pedido y el nombre del cliente si no lo sabes.`;
 }
@@ -345,16 +345,20 @@ ${knownName ? "Ya sabes su nombre, no se lo vuelvas a preguntar; puedes usarlo p
 ${knownAddress ? `Ya tienes una dirección de despacho registrada. Si el cliente pide despacho, NO se la vuelvas a preguntar — menciónala directamente en el resumen (por ejemplo: "despacho a ${knownAddress}, ¿sigue siendo esa dirección?") y solo pide una nueva si te dice que cambió.` : ""}`;
 
   const billingSection = business.ask_billing_data
-    ? `- Este negocio quiere poder emitir boleta/factura y ofrecer descuentos más adelante a sus clientes. Por eso, en algún momento natural antes de confirmar el pedido (por ejemplo junto con el resumen final), pide el nombre (de la persona, o de la empresa si compra a nombre de una), RUT y correo electrónico — a menos que ya los tengas (revisa la información conocida más arriba). Pídelo una sola vez, sin insistir. Si el cliente no te los da o prefiere no darlos, no se lo vuelvas a pedir y sigue adelante con el pedido igual — estos datos nunca son obligatorios para completar una venta.`
+    ? `- Este negocio quiere poder emitir boleta/factura y ofrecer descuentos más adelante a sus clientes. Por eso, en algún momento natural antes de confirmar el pedido (por ejemplo junto con el resumen final), pide el nombre (de la persona, o de la empresa si compra a nombre de una), RUT y correo electrónico — a menos que ya los tengas (revisa la información conocida más abajo). Pídelo una sola vez, sin insistir. Si el cliente no te los da o prefiere no darlos, no se lo vuelvas a pedir y sigue adelante con el pedido igual — estos datos nunca son obligatorios para completar una venta.`
     : "";
 
-  return `Eres el agente de pedidos de ${business.name}. Los clientes te escriben online, desde el sitio web o un link compartido.
+  // Separado en dos bloques a propósito, no solo por prolijidad: todo lo de acá abajo es igual
+  // para cualquier cliente de este negocio (mismo catálogo, mismas reglas), así que va como
+  // bloque cacheable en la llamada a Claude — se reutiliza entre TODAS las conversaciones del
+  // negocio, no solo dentro de una misma conversación. Lo que sí cambia por cliente (nombre,
+  // dirección, correo, RUT conocidos) va aparte, sin cachear, en customerSection más abajo en
+  // este archivo — por eso las referencias de acá dicen "más abajo" en vez de "más arriba".
+  const staticPrompt = `Eres el agente de pedidos de ${business.name}. Los clientes te escriben online, desde el sitio web o un link compartido.
 
 Importante: en la pantalla ya se le mostró este saludo al cliente antes de que escribiera, así que su primer mensaje puede ser una respuesta directa a lo que ahí se pregunta — interprétalo con ese contexto, no como un mensaje aislado. No vuelvas a saludar ni a presentar el negocio de nuevo en tu primera respuesta.
 
 Saludo que ya vio el cliente: "${business.greeting || ""}"
-
-${customerSection}
 
 ${business.system_prompt_extra || ""}
 
@@ -384,6 +388,8 @@ Los campos customer_email y customer_rut deben llevar el correo y RUT del client
 El campo delivery.cost_pending debe ser true solo mientras el despacho se cotice aparte y todavía no tengas el monto (ver arriba); en cualquier otro caso, déjalo en false.
 El campo payment.status puede ser: null, "pendiente" o "cliente_avisa_transferencia" (usa null si este negocio no cobra por transferencia).
 Si aún no saben el tipo de entrega, usa "delivery":null. Si aún no han pedido nada, usa items vacío y total 0. Este bloque nunca lo ve el cliente. Nunca lo omitas.`;
+
+  return { staticPrompt, customerSection };
 }
 
 function deriveOrderStatus(parsedOrder) {
@@ -937,7 +943,7 @@ async function processMessage(business, sessionId, message) {
   ]);
 
   const apiMessages = [...history, { role: "user", content: message }];
-  const systemPrompt = buildSystemPrompt(business, menuItems, customer);
+  const { staticPrompt, customerSection } = buildSystemPrompt(business, menuItems, customer);
 
   const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -949,7 +955,16 @@ async function processMessage(business, sessionId, message) {
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
       max_tokens: 1000,
-      system: systemPrompt,
+      // El bloque estático (catálogo + reglas del negocio) se marca cacheable — es igual para
+      // todos los clientes de este negocio, así que Claude lo reutiliza entre conversaciones
+      // distintas en vez de cobrarlo entero cada vez (si el negocio es chico y el prompt no
+      // llega al mínimo cacheable, Anthropic simplemente lo trata como no cacheado, sin costo
+      // extra). El bloque con los datos del cliente va aparte, sin cachear, porque cambia
+      // según quién escribe.
+      system: [
+        { type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } },
+        { type: "text", text: customerSection },
+      ],
       messages: apiMessages,
     }),
   });
