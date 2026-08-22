@@ -1,0 +1,33 @@
+# Headers de seguridad para el sitio en Netlify. Antes no se mandaba ninguno.
+#
+# index.html es la excepción a propósito: es el chat público, y algunos negocios lo incorporan
+# dentro de un iframe en su propia página web (opción "incorporar el agente en tu propia web" de
+# Configuración → Tu agente) — por eso NO lleva X-Frame-Options ni frame-ancestors, se deja
+# embebible desde cualquier sitio. El resto de las páginas (panel de administración, registro,
+# recuperación de clave, etc.) no tienen ningún motivo para vivir dentro de un iframe ajeno, así
+# que se bloquean para evitar clickjacking.
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), camera=(), microphone=()
+
+/ventas.html
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
+/admin.html
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
+/signup.html
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
+/reset-password.html
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
+/inicio.html
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'

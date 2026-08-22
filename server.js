@@ -31,10 +31,30 @@ process.on("uncaughtException", (err) => {
 });
 
 const app = express();
+// Railway pone un proxy delante del backend — sin esto, req.ip (y por lo tanto TODOS los rate
+// limits de este archivo, incluido el que ya existía para signup/login) no ve la IP real del
+// cliente, sino la del proxy, tratando a todo el tráfico como si viniera de un solo lugar. "1"
+// le dice a Express que confíe en exactamente un salto de proxy delante (el de Railway), que es
+// lo que corresponde acá — no "true" (confiar en cualquier cantidad de proxies encadenados).
+app.set("trust proxy", 1);
 app.use(express.json({
   limit: "5mb", // el límite por defecto es muy chico para subir un logo
   verify: (req, res, buf) => { req.rawBody = buf; }, // lo necesita el webhook de WhatsApp para verificar la firma
 }));
+
+// Headers de seguridad en todas las respuestas — antes no se mandaba ninguno. La gran mayoría
+// del tráfico de este backend es JSON puro, pero también sirve dos páginas HTML (la redirección
+// y el retorno de Webpay, más abajo), que ajustan el Content-Security-Policy aparte porque
+// necesitan un formulario que se auto-envía con un script inline.
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "geolocation=(), camera=(), microphone=()");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  next();
+});
+
 // Rutas que de verdad necesitan CORS abierto a cualquier origen: el chat público, que debe
 // poder llamarse tanto desde nuestro propio sitio como desde el sitio propio de cada negocio
 // si decide incorporar el agente en su web (opción 3 de "Tu agente" en Configuración) — ahí no
@@ -77,10 +97,33 @@ app.use(
   })
 );
 
+// Límite de intentos por IP para todas las rutas protegidas por dashboard_password/ADMIN_PASSWORD
+// (settings, pedidos, clientes, etc.) — la clave en sí protege el recurso, pero sin esto nada
+// impedía probar miles de claves por minuto contra un negocio puntual (dashboard_password se
+// guarda en texto plano y se compara directo, sin límite de intentos hasta ahora). 300 cada 15
+// minutos es holgado para el uso normal de un panel activo (incluso de un admin revisando varios
+// negocios seguidos), pero corta cualquier intento de fuerza bruta automatizado. En memoria por
+// IP, alcanza porque Railway corre un solo proceso — mismo patrón que el límite de WhatsApp.
+const dashboardAuthHits = new Map(); // ip -> [timestamps]
+const DASHBOARD_AUTH_LIMIT = 300;
+const DASHBOARD_AUTH_WINDOW_MS = 15 * 60 * 1000;
+function isDashboardAuthRateLimited(req) {
+  const ip = req.ip;
+  const now = Date.now();
+  const hits = (dashboardAuthHits.get(ip) || []).filter((t) => now - t < DASHBOARD_AUTH_WINDOW_MS);
+  hits.push(now);
+  dashboardAuthHits.set(ip, hits);
+  return hits.length > DASHBOARD_AUTH_LIMIT;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, hits] of dashboardAuthHits) {
+    if (!hits.some((t) => now - t < DASHBOARD_AUTH_WINDOW_MS)) dashboardAuthHits.delete(ip);
+  }
+}, 30 * 60 * 1000);
+
 // Límite de intentos para las rutas más expuestas a fuerza bruta / abuso (registro y
-// recuperación de clave) — 20 intentos cada 15 minutos por IP. Las rutas protegidas con la
-// clave del panel se protegen con esa clave, no con rate limiting general (para no arriesgar
-// cortar tráfico legítimo de negocios con mucho volumen). El chat web sí necesita su propio
+// recuperación de clave) — 20 intentos cada 15 minutos por IP. El chat web tiene su propio
 // límite, más abajo — es público (sin clave) y cada mensaje gasta una llamada real a Claude.
 const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -571,6 +614,10 @@ app.post("/api/business/reset-password", authRateLimit, async (req, res) => {
 // Helper compartido: busca el negocio por slug y valida la clave del panel (header x-dashboard-key).
 // Devuelve la fila del negocio si todo bien, o null y ya responde el error si no.
 async function getBusinessWithAuth(req, res) {
+  if (isDashboardAuthRateLimited(req)) {
+    res.status(429).json({ error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." });
+    return null;
+  }
   const { rows } = await pool.query("select * from businesses where slug = $1", [req.params.slug]);
   const business = rows[0];
   if (!business) {
@@ -1125,6 +1172,7 @@ app.post("/api/chat/:slug", chatRateLimit, async (req, res) => {
 // Panel simple para que el negocio vea sus pedidos. Protegido con una clave por negocio
 // (header x-dashboard-key), guardada en la columna dashboard_password de businesses.
 app.get("/api/business/:slug/orders", async (req, res) => {
+  if (isDashboardAuthRateLimited(req)) return res.status(429).json({ error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." });
   const { rows: bizRows } = await pool.query("select id, dashboard_password from businesses where slug = $1", [
     req.params.slug,
   ]);
@@ -1293,6 +1341,7 @@ app.delete("/api/business/:slug/customers/:sessionId", async (req, res) => {
 // El negocio marca manualmente que verificó la transferencia en su cuenta, o cambia el estado
 // a cualquier otro valor válido. Misma clave.
 app.patch("/api/orders/:orderId/status", async (req, res) => {
+  if (isDashboardAuthRateLimited(req)) return res.status(429).json({ error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." });
   const { status } = req.body; // 'draft' | 'confirmado' | 'pago_avisado' | 'pago_verificado' | 'cancelado'
   const { rows: orderRows } = await pool.query(
     "select o.conversation_id, o.status as previous_status, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
@@ -1323,6 +1372,7 @@ app.patch("/api/orders/:orderId/status", async (req, res) => {
 // que el cliente dio al confirmar, si el negocio los pidió). Es independiente del estado del
 // pedido — un pedido puede estar pagado y aun así seguir con la boleta pendiente. Misma clave.
 app.patch("/api/orders/:orderId/invoice-status", async (req, res) => {
+  if (isDashboardAuthRateLimited(req)) return res.status(429).json({ error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." });
   const { invoice_status } = req.body; // 'pendiente' | 'emitida'
   const { rows: orderRows } = await pool.query(
     "select o.id, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
@@ -1348,6 +1398,7 @@ app.patch("/api/orders/:orderId/invoice-status", async (req, res) => {
 // el link de pago o los datos bancarios — antes de esto el cliente nunca llegó a ver
 // instrucciones de pago, porque el total todavía no era el definitivo. Misma clave.
 app.patch("/api/orders/:orderId/delivery-cost", async (req, res) => {
+  if (isDashboardAuthRateLimited(req)) return res.status(429).json({ error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." });
   const price = Number(req.body.price);
   if (!price || price <= 0) return res.status(400).json({ error: "Ingresa un monto de despacho válido" });
 
@@ -1401,6 +1452,7 @@ app.patch("/api/orders/:orderId/delivery-cost", async (req, res) => {
 
 // El negocio elimina un pedido por completo (por ejemplo, un pedido de prueba o duplicado). Misma clave.
 app.delete("/api/orders/:orderId", async (req, res) => {
+  if (isDashboardAuthRateLimited(req)) return res.status(429).json({ error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." });
   const { rows: orderRows } = await pool.query(
     "select o.id, b.* from orders o join businesses b on b.id = o.business_id where o.id = $1",
     [req.params.orderId]
@@ -1431,10 +1483,13 @@ app.get("/api/webpay/redirect/:token", async (req, res) => {
   const { environment } = await getWebpayTransaction(business);
   const webpayUrl = `${environment}/webpayserver/initTransaction`;
 
+  // Esta página necesita un script inline (el auto-submit del formulario) y no puede usar el
+  // Content-Security-Policy estricto por defecto — se relaja solo acá, no en el resto del sitio.
+  res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; frame-ancestors 'none'");
   res.send(`<!DOCTYPE html><html><body onload="document.forms[0].submit()">
     <p>Redirigiendo a Webpay...</p>
     <form method="POST" action="${webpayUrl}">
-      <input type="hidden" name="token_ws" value="${req.params.token}" />
+      <input type="hidden" name="token_ws" value="${order.webpay_token}" />
     </form>
   </body></html>`);
 });

@@ -1230,9 +1230,9 @@
           ${it.has_image ? `<img src="${BACKEND_URL}/api/business/${BUSINESS_SLUG}/menu-items/${it.id}/image" />` : `<div class="no-photo"></div>`}
           <input type="file" accept="image/*" style="display:none;" onchange="uploadItemImage('${it.id}', this)" />
         </label>
-        <input class="name" value="${(it.name || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="name" />
+        <input class="name" value="${escapeHtml(it.name || "")}" onchange="updateItem('${it.id}', this)" data-field="name" />
         <input class="price" type="text" inputmode="numeric" value="${(it.price || 0).toLocaleString("es-CL")}" onchange="updateItem('${it.id}', this)" data-field="price" />
-        <input class="category" value="${(it.category || "").replace(/"/g, "&quot;")}" onchange="updateItem('${it.id}', this)" data-field="category" />
+        <input class="category" value="${escapeHtml(it.category || "")}" onchange="updateItem('${it.id}', this)" data-field="category" />
         <input class="stock" type="number" min="0" placeholder="Sin límite" title="Stock (vacío = sin trackear)" value="${it.stock === null || it.stock === undefined ? "" : it.stock}" onchange="updateItem('${it.id}', this)" data-field="stock" />
         <label class="active-toggle">
           <input type="checkbox" style="width:auto;" ${it.active ? "checked" : ""} onchange="updateItem('${it.id}', this)" data-field="active" /> activo
