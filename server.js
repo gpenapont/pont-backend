@@ -78,9 +78,10 @@ app.use(
 );
 
 // Límite de intentos para las rutas más expuestas a fuerza bruta / abuso (registro y
-// recuperación de clave) — 20 intentos cada 15 minutos por IP. El resto de las rutas se
-// protege con la clave del panel en sí, no con rate limiting general (para no arriesgar
-// cortar tráfico legítimo de negocios con mucho volumen de chat).
+// recuperación de clave) — 20 intentos cada 15 minutos por IP. Las rutas protegidas con la
+// clave del panel se protegen con esa clave, no con rate limiting general (para no arriesgar
+// cortar tráfico legítimo de negocios con mucho volumen). El chat web sí necesita su propio
+// límite, más abajo — es público (sin clave) y cada mensaje gasta una llamada real a Claude.
 const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -92,6 +93,18 @@ const authRateLimit = rateLimit({
 // Las rutas de admin son bajo volumen (solo las usa Gonzalo), así que es seguro limitarlas
 // todas — protege ADMIN_PASSWORD, que funciona como llave maestra de toda la plataforma.
 app.use("/api/admin", authRateLimit);
+
+// El chat web es público y cada mensaje dispara una llamada real a la API de Claude — sin esto,
+// cualquiera podría escribir sin parar y generar costo real. 60 mensajes cada 10 minutos por IP
+// es holgado para una conversación real (incluso varias en paralelo desde la misma red/oficina),
+// pero corta un script mandando mensajes sin fin.
+const chatRateLimit = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Estás escribiendo muy rápido. Espera un momento e inténtalo de nuevo." },
+});
 
 const FACEBOOK_APP_ID = (process.env.FACEBOOK_APP_ID || "").trim();
 const FACEBOOK_APP_SECRET = (process.env.FACEBOOK_APP_SECRET || "").trim();
@@ -960,25 +973,31 @@ async function processMessage(business, sessionId, message) {
     }
   }
 
+  // El teléfono, a diferencia del nombre/correo/RUT, no depende de que Claude lo detecte — para
+  // conversaciones de WhatsApp ya lo sabemos con certeza desde el session_id (siempre
+  // "whatsapp-<número>"), así que se guarda solo, sin esperar a que el cliente lo mencione.
+  const whatsappPhone = sessionId.startsWith("whatsapp-") ? sessionId.slice("whatsapp-".length) : null;
+
   // Guarda lo que Claude haya aprendido de este cliente (nombre, dirección, y si el negocio
   // pide datos de facturación, también correo y RUT), para no volver a preguntarlo en la
   // próxima conversación o pedido.
-  if (parsedOrder) {
-    const learnedName = parsedOrder.customer_name || null;
-    const learnedAddress = (parsedOrder.delivery && parsedOrder.delivery.address) || null;
-    const learnedEmail = parsedOrder.customer_email || null;
-    const learnedRut = parsedOrder.customer_rut || null;
-    if (learnedName || learnedAddress || learnedEmail || learnedRut) {
+  if (parsedOrder || whatsappPhone) {
+    const learnedName = (parsedOrder && parsedOrder.customer_name) || null;
+    const learnedAddress = (parsedOrder && parsedOrder.delivery && parsedOrder.delivery.address) || null;
+    const learnedEmail = (parsedOrder && parsedOrder.customer_email) || null;
+    const learnedRut = (parsedOrder && parsedOrder.customer_rut) || null;
+    if (learnedName || learnedAddress || learnedEmail || learnedRut || whatsappPhone) {
       await pool.query(
-        `insert into customers (business_id, session_id, name, last_address, email, rut)
-         values ($1, $2, $3, $4, $5, $6)
+        `insert into customers (business_id, session_id, name, last_address, email, rut, phone)
+         values ($1, $2, $3, $4, $5, $6, $7)
          on conflict (business_id, session_id) do update set
            name = coalesce(excluded.name, customers.name),
            last_address = coalesce(excluded.last_address, customers.last_address),
            email = coalesce(excluded.email, customers.email),
            rut = coalesce(excluded.rut, customers.rut),
+           phone = coalesce(excluded.phone, customers.phone),
            updated_at = now()`,
-        [business.id, sessionId, learnedName, learnedAddress, learnedEmail, learnedRut]
+        [business.id, sessionId, learnedName, learnedAddress, learnedEmail, learnedRut, whatsappPhone]
       );
     }
   }
@@ -997,14 +1016,15 @@ async function processMessage(business, sessionId, message) {
     const customerName = parsedOrder.customer_name || (customer && customer.name) || null;
     const customerEmail = parsedOrder.customer_email || (customer && customer.email) || null;
     const customerRut = parsedOrder.customer_rut || (customer && customer.rut) || null;
+    const customerPhone = whatsappPhone || (customer && customer.phone) || null;
 
     if (latestOrder && !latestClosed) {
       const updated = await pool.query(
         `update orders set items=$1, total=$2, delivery_type=$3, delivery_address=$4, status=$5, customer_name=$6,
-         customer_email=$7, customer_rut=$8,
+         customer_email=$7, customer_rut=$8, customer_phone=$9,
          confirmed_at = case when confirmed_at is null and $5 <> 'draft' then now() else confirmed_at end
-         where id=$9 returning *`,
-        [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, customerEmail, customerRut, latestOrder.id]
+         where id=$10 returning *`,
+        [JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, customerEmail, customerRut, customerPhone, latestOrder.id]
       );
       orderSnapshot = updated.rows[0];
     } else if ((!latestClosed || status === "draft") && (status !== "draft" || (parsedOrder.items || []).length > 0)) {
@@ -1013,9 +1033,9 @@ async function processMessage(business, sessionId, message) {
       // el último pedido ya se cerró y Claude sigue repitiendo un estado confirmado (porque no
       // sabe que se cerró), no se crea nada — evita duplicar el pedido que ya se pagó/canceló.
       const inserted = await pool.query(
-        `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, customer_name, customer_email, customer_rut, confirmed_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, case when $7 <> 'draft' then now() else null end) returning *`,
-        [business.id, conversation.id, JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, customerEmail, customerRut]
+        `insert into orders (business_id, conversation_id, items, total, delivery_type, delivery_address, status, customer_name, customer_email, customer_rut, customer_phone, confirmed_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, case when $7 <> 'draft' then now() else null end) returning *`,
+        [business.id, conversation.id, JSON.stringify(parsedOrder.items || []), parsedOrder.total || 0, delivery.type || null, delivery.address || null, status, customerName, customerEmail, customerRut, customerPhone]
       );
       orderSnapshot = inserted.rows[0];
     }
@@ -1069,7 +1089,7 @@ async function processMessage(business, sessionId, message) {
   return { replyText, order: orderSnapshot, photos };
 }
 
-app.post("/api/chat/:slug", async (req, res) => {
+app.post("/api/chat/:slug", chatRateLimit, async (req, res) => {
   const { slug } = req.params;
   const { sessionId, message } = req.body;
   if (!sessionId || !message) return res.status(400).json({ error: "Falta sessionId o message" });
@@ -1204,14 +1224,14 @@ app.get("/api/business/:slug/customers", async (req, res) => {
   // dirección — antes de ese fix, un cliente que solo chateaba sin llegar a esa parte
   // no aparecía nunca en esta lista pese a tener conversación real.
   const { rows } = await pool.query(
-    `select conv.session_id, c.name, c.last_address, c.email, c.rut,
+    `select conv.session_id, c.name, c.last_address, c.email, c.rut, c.phone,
             coalesce(c.created_at, min(m.created_at)) as created_at,
             max(m.created_at) as last_message_at, count(m.id) as message_count
      from conversations conv
      left join customers c on c.business_id = conv.business_id and c.session_id = conv.session_id
      left join messages m on m.conversation_id = conv.id
      where conv.business_id = $1
-     group by conv.session_id, c.name, c.last_address, c.email, c.rut, c.created_at
+     group by conv.session_id, c.name, c.last_address, c.email, c.rut, c.phone, c.created_at
      order by last_message_at desc nulls last`,
     [business.id]
   );
@@ -1547,6 +1567,28 @@ app.get("/api/whatsapp/webhook", (req, res) => {
   }
 });
 
+// Límite por número de WhatsApp que escribe, en memoria (alcanza porque Railway corre un solo
+// proceso) — no sirve limitar por IP acá, porque todos los mensajes entrantes llegan siempre
+// desde los servidores de Meta, no desde el teléfono del cliente. Corta a un número puntual que
+// mande mensajes sin parar, sin afectar a nadie más.
+const whatsappSenderHits = new Map(); // número -> [timestamps de sus últimos mensajes]
+const WHATSAPP_SENDER_LIMIT = 20;
+const WHATSAPP_SENDER_WINDOW_MS = 5 * 60 * 1000;
+function isWhatsappSenderRateLimited(from) {
+  const now = Date.now();
+  const hits = (whatsappSenderHits.get(from) || []).filter((t) => now - t < WHATSAPP_SENDER_WINDOW_MS);
+  hits.push(now);
+  whatsappSenderHits.set(from, hits);
+  return hits.length > WHATSAPP_SENDER_LIMIT;
+}
+// Limpieza periódica para no acumular memoria con números que ya no escriben.
+setInterval(() => {
+  const now = Date.now();
+  for (const [from, hits] of whatsappSenderHits) {
+    if (!hits.some((t) => now - t < WHATSAPP_SENDER_WINDOW_MS)) whatsappSenderHits.delete(from);
+  }
+}, 30 * 60 * 1000);
+
 // Acá llegan los mensajes reales de WhatsApp. Meta identifica el número al que le escribieron
 // (phone_number_id) — con eso buscamos a qué negocio pertenece y usamos el mismo motor del chat web.
 app.post("/api/whatsapp/webhook", async (req, res) => {
@@ -1574,6 +1616,11 @@ app.post("/api/whatsapp/webhook", async (req, res) => {
     const phoneNumberId = value.metadata.phone_number_id;
     const from = incomingMessage.from; // número del cliente, en formato internacional sin '+'
     const text = incomingMessage.text.body;
+
+    if (isWhatsappSenderRateLimited(from)) {
+      console.error("Mensajes de WhatsApp descartados por exceso de frecuencia:", from);
+      return;
+    }
 
     const { rows: businessRows } = await pool.query(
       "select * from businesses where whatsapp_phone_number_id = $1",

@@ -923,13 +923,14 @@
   // reemplaza a la sincronización con Google Sheets, que exigía verificación de marca de Google.
   function exportOrdersToExcel() {
     if (!lastLoadedOrders.length) { alert("No hay pedidos para exportar."); return; }
-    const headers = ["Fecha", "Cliente", "Correo", "RUT", "Productos", "Total", "Entrega", "Estado", "Boleta/Factura", "ID Pedido"];
+    const headers = ["Fecha", "Cliente", "Teléfono", "Correo", "RUT", "Productos", "Total", "Entrega", "Estado", "Boleta/Factura", "ID Pedido"];
     const rows = lastLoadedOrders.map((o) => {
       const items = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(", ");
       const delivery = o.delivery_type === "despacho" ? `Despacho: ${o.delivery_address || ""}` : (o.delivery_type === "retiro" ? "Retiro" : "");
       return [
         new Date(o.created_at).toLocaleString("es-CL"),
         o.customer_name || "",
+        o.customer_phone || "",
         o.customer_email || "",
         o.customer_rut || "",
         items,
@@ -979,6 +980,7 @@
               ${o.status === "pendiente_agregacostodespacho" ? `<button class="small" style="margin-top:8px; background:var(--coral);" onclick="addDeliveryCost('${o.id}')">Agregar costo de despacho</button>` : ""}
             </div>
             <div style="flex:0 0 33%; min-width:0; text-align:right; display:flex; flex-direction:column; align-items:flex-end;">
+              ${o.customer_phone ? `<div class="order-meta">Tel: ${escapeHtml(o.customer_phone)}</div>` : ""}
               ${o.customer_email ? `<div class="order-meta">Correo: ${escapeHtml(o.customer_email)}</div>` : ""}
               ${o.customer_rut ? `<div class="order-meta">RUT: ${escapeHtml(o.customer_rut)}</div>` : ""}
               <button class="small" style="margin-top:auto; background:${o.invoice_status === "emitida" ? "var(--mint)" : "#5C6B76"}; color:${o.invoice_status === "emitida" ? "var(--navy)" : "#fff"};" onclick="toggleInvoiceStatus('${o.id}', '${o.invoice_status === "emitida" ? "pendiente" : "emitida"}')">${o.invoice_status === "emitida" ? "✓ Boleta/factura emitida" : "Marcar boleta/factura emitida"}</button>
@@ -1016,6 +1018,7 @@
         <div style="flex:1; min-width:0;">
           <div class="customer-name">${escapeHtml(c.name || "Cliente sin nombre")}</div>
           ${c.last_address ? `<div class="customer-address">${escapeHtml(c.last_address)}</div>` : ""}
+          ${c.phone ? `<div class="customer-address">${escapeHtml(c.phone)}</div>` : ""}
           ${c.email || c.rut ? `<div class="customer-address">${[c.email ? escapeHtml(c.email) : null, c.rut ? escapeHtml(c.rut) : null].filter(Boolean).join(" · ")}</div>` : ""}
         </div>
         <div class="customer-meta" style="flex:0 0 150px;">
