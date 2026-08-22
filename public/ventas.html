@@ -183,7 +183,7 @@
         <b>Importante:</b> una vez conectado, el agente responde <b>todos</b> los mensajes que le lleguen a ese número, sin distinguir quién escribe. Si conectas un número que también usas para temas personales, familiares o amigos también van a recibir respuestas del agente. Por eso conviene usar un número de WhatsApp Business dedicado solo al negocio, y no tu WhatsApp personal.
       </p>
       <button id="waConnectBtn" onclick="launchWhatsAppSignup()" style="background:#1877F2;">Conectar mi WhatsApp con Facebook</button>
-      <div id="waConnectedMsg" style="display:none; margin-top:10px; font-size:12.5px; color:#1E7B34; font-weight:700;">✓ WhatsApp conectado</div>
+      <div id="waConnectedMsg" style="display:none; margin-top:10px; font-size:12.5px; color:#1E7B34; font-weight:700;">✓ WhatsApp conectado<span id="waConnectedNumber"></span></div>
 
       <details style="margin-top:16px;">
         <summary style="font-size:12px; color:var(--muted); cursor:pointer;">O ingresa los datos manualmente</summary>
@@ -1148,6 +1148,8 @@
       document.getElementById("webpayApiKey").value = data.webpay_api_key || "";
       document.getElementById("whatsappPhoneId").value = data.whatsapp_phone_number_id || "";
       document.getElementById("whatsappAccessToken").value = data.whatsapp_access_token || "";
+      document.getElementById("waConnectedMsg").style.display = data.whatsapp_phone_number_id ? "block" : "none";
+      document.getElementById("waConnectedNumber").textContent = data.whatsapp_display_number ? ` (${data.whatsapp_display_number})` : "";
 
       document.getElementById("botPaused").checked = !!data.bot_paused;
       document.getElementById("pauseScheduleEnabled").checked = !!data.pause_schedule_enabled;

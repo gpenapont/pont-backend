@@ -596,6 +596,7 @@ app.get("/api/business/:slug/settings", async (req, res) => {
     webpay_api_key: business.webpay_api_key,
     whatsapp_phone_number_id: business.whatsapp_phone_number_id,
     whatsapp_access_token: business.whatsapp_access_token,
+    whatsapp_display_number: business.whatsapp_display_number,
     subscription_status: business.subscription_status,
     last_payment_date: business.last_payment_date,
     mp_checkout_url: business.mp_checkout_url,
@@ -668,14 +669,27 @@ app.put("/api/business/:slug/settings", async (req, res) => {
     .map((e) => e.trim())
     .filter(Boolean)
     .join(", ");
+
+  // Si cambió el phone_number_id o el token (conexión manual de WhatsApp), vuelve a consultar el
+  // número real — así también se ve para quien lo conecta a mano, no solo por Embedded Signup.
+  let whatsappDisplayNumber = business.whatsapp_display_number;
+  const waChanged =
+    (whatsapp_phone_number_id || null) !== business.whatsapp_phone_number_id ||
+    (whatsapp_access_token || null) !== business.whatsapp_access_token;
+  if (waChanged) {
+    whatsappDisplayNumber = whatsapp_phone_number_id && whatsapp_access_token
+      ? await fetchWhatsappDisplayNumber(whatsapp_phone_number_id, whatsapp_access_token)
+      : null;
+  }
+
   await pool.query(
     `update businesses set greeting=$1, system_prompt_extra=$2, bank_name=$3, bank_account_type=$4,
      bank_account_number=$5, bank_rut=$6, bank_email=$7, webpay_enabled=$8, webpay_commerce_code=$9, webpay_api_key=$10,
      whatsapp_phone_number_id=$11, whatsapp_access_token=$12, bot_paused=$13, pause_schedule_enabled=$14, pause_schedule=$15,
      pickup_enabled=$16, pickup_address=$17, delivery_enabled=$18, delivery_rules=$19, low_stock_threshold=$20,
      ask_billing_data=$21, new_orders_alert_enabled=$22, abandoned_cart_alert_enabled=$23,
-     send_alerts_to_account_email=$24, alert_emails=$25
-     where id=$26`,
+     send_alerts_to_account_email=$24, alert_emails=$25, whatsapp_display_number=$26
+     where id=$27`,
     [greeting, system_prompt_extra, bank_name, bank_account_type, bank_account_number, bank_rut, bank_email,
      !!webpay_enabled, webpay_commerce_code || null, webpay_api_key || null,
      whatsapp_phone_number_id || null, whatsapp_access_token || null,
@@ -683,7 +697,7 @@ app.put("/api/business/:slug/settings", async (req, res) => {
      !!pickup_enabled, pickup_address || null, !!delivery_enabled, delivery_rules || null,
      low_stock_threshold === "" || low_stock_threshold === undefined || low_stock_threshold === null ? null : Number(low_stock_threshold),
      !!ask_billing_data, !!new_orders_alert_enabled, !!abandoned_cart_alert_enabled,
-     !!send_alerts_to_account_email, cleanedAlertEmails || null,
+     !!send_alerts_to_account_email, cleanedAlertEmails || null, whatsappDisplayNumber,
      business.id]
   );
   res.json({ saved: true });
@@ -1586,6 +1600,23 @@ app.post("/api/whatsapp/webhook", async (req, res) => {
   }
 });
 
+// Le pregunta a Meta el número real (ej. "+56 9 1234 5678") detrás de un phone_number_id, para
+// mostrárselo al negocio en el panel — guardar solo el phone_number_id no le dice nada a simple
+// vista. Si falla (token vencido, id manual mal escrito, etc.) no revienta la conexión por eso.
+async function fetchWhatsappDisplayNumber(phoneNumberId, accessToken) {
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/v23.0/${phoneNumberId}?fields=display_phone_number`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    const data = await res.json();
+    return (res.ok && data.display_phone_number) || null;
+  } catch (e) {
+    console.error("Error consultando el número de WhatsApp:", e);
+    return null;
+  }
+}
+
 // Termina la conexión de WhatsApp Embedded Signup: cambia el "code" que dio el navegador por un
 // token real, suscribe nuestra app a los mensajes de esa cuenta, y guarda el phone_number_id + token.
 app.post("/api/business/:slug/whatsapp/connect", async (req, res) => {
@@ -1611,9 +1642,11 @@ app.post("/api/business/:slug/whatsapp/connect", async (req, res) => {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
 
+    const displayNumber = await fetchWhatsappDisplayNumber(phoneNumberId, tokenData.access_token);
+
     await pool.query(
-      "update businesses set whatsapp_phone_number_id=$1, whatsapp_access_token=$2 where id=$3",
-      [phoneNumberId, tokenData.access_token, business.id]
+      "update businesses set whatsapp_phone_number_id=$1, whatsapp_access_token=$2, whatsapp_display_number=$3 where id=$4",
+      [phoneNumberId, tokenData.access_token, displayNumber, business.id]
     );
     res.json({ connected: true });
   } catch (e) {
